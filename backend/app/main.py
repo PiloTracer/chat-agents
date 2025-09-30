@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import settings
+
 from app.defaults import DEFAULT_AGENT_DEFINITIONS, DEFAULT_USERS, DEFAULT_AGENT_ACLS
 from app.models import Base, Agent, User, AgentACL
 from app.db import init_db, session_scope
@@ -72,13 +74,26 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Multi-Agent RAG Backend", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-    allow_credentials=True,
-)
+
+def _parse_allowed_origins(raw: str) -> list[str]:
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+allowed_origins = _parse_allowed_origins(settings.ALLOWED_ORIGINS)
+allow_all_origins = "*" in allowed_origins
+
+cors_kwargs = {
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+
+if allow_all_origins:
+    cors_kwargs.update(allow_origins=["*"], allow_credentials=False)
+else:
+    if not allowed_origins:
+        allowed_origins = ["http://localhost:3000"]
+    cors_kwargs.update(allow_origins=allowed_origins, allow_credentials=True)
+
+app.add_middleware(CORSMiddleware, **cors_kwargs)
 
 @app.get("/healthz")
 def healthz():
