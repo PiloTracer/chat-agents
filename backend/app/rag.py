@@ -44,28 +44,28 @@ async def upsert_document(
         doc_id = row[0]
 
     pairs: List[Tuple[str, str]] = list(iter_sources)
-    refs: List[str] = []
-    texts: List[str] = []
+    chunks: List[Tuple[str, str]] = []
     for src, txt in pairs:
         for p in chunker(txt):
-            refs.append(src)
-            texts.append(p)
+            chunks.append((src, p))
 
-    if not texts:
+    if not chunks:
         return doc_id, 0
 
+    texts = [body for _, body in chunks]
     # embed
     vecs = await embed_texts(texts)
 
     # insert chunks (explicit CAST for pgvector)
-    for ref, body, emb in zip(refs, texts, vecs):
+    for idx, ((ref, body), emb) in enumerate(zip(chunks, vecs)):
         db.execute(
             text(
-                "INSERT INTO chunks (agent_slug, document_id, source_ref, text, embedding) "
-                "VALUES (:a, :d, :r, :t, CAST(:e AS vector))"
+                "INSERT INTO chunks (agent_slug, document_id, source_ref, text, embedding, ord) "
+                "VALUES (:a, :d, :r, :t, CAST(:e AS vector), :o)"
             ),
-            {"a": agent_slug, "d": doc_id, "r": ref[:255], "t": body, "e": emb},
+            {"a": agent_slug, "d": doc_id, "r": ref[:255], "t": body, "e": emb, "o": idx},
         )
+
     db.commit()
     return doc_id, len(texts)
 
