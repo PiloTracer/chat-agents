@@ -1,0 +1,38 @@
+{
+    "name": "multiagent-rag (backend)",
+    "dockerComposeFile": [
+      "../../docker-compose.yml"
+    ],
+    "service": "backend",
+    "workspaceFolder": "/app",
+    "overrideCommand": false,
+    "remoteUser": "root",
+    "updateRemoteUserUID": false,
+    "customizations": {
+      "vscode": {
+        "extensions": [
+          "ms-python.python",
+          "ms-python.vscode-pylance",
+          "charliermarsh.ruff",
+          "ms-azuretools.vscode-docker",
+          "tamasfe.even-better-toml"
+        ],
+        "settings": {
+          "python.defaultInterpreterPath": "/usr/local/bin/python",
+          "python.analysis.typeCheckingMode": "basic",
+          "editor.formatOnSave": true,
+          "ruff.enable": true
+        }
+      }
+    },
+    "forwardPorts": [8000],
+    "postCreateCommand": [
+      "bash",
+      "-lc",
+      "python -V && pip -V && pip install --upgrade pip && ruff --version || true"
+    ],
+    "portsAttributes": {
+      "8000": { "label": "FastAPI" }
+    }
+  }
+  

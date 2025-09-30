@@ -1,0 +1,17 @@
+# Dockerfile.pg
+FROM postgres:18.0-bookworm
+
+# Install pgvector from PGDG (one repo entry only)
+RUN set -eux; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends wget gnupg ca-certificates lsb-release; \
+  install -d /usr/share/keyrings; \
+  # Clean any previous conflicting entries if you tried earlier
+  rm -f /etc/apt/sources.list.d/pgdg*.list; \
+  wget -qO- https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg; \
+  echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt $(. /etc/os-release && echo ${VERSION_CODENAME})-pgdg main" \
+    > /etc/apt/sources.list.d/pgdg.list; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends postgresql-${PG_MAJOR}-pgvector; \
+  rm -rf /var/lib/apt/lists/*

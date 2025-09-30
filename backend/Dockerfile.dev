@@ -1,0 +1,44 @@
+# backend/Dockerfile
+FROM python:3.13.7-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    LANG=C.UTF-8
+
+WORKDIR /app
+
+# System deps:
+# - poppler-utils: helpful for PDFs
+# - libreoffice: optional conversions you already used
+# - tesseract-ocr + ENG + SPA language packs
+# - libtesseract-dev: lib headers (some environments need it)
+# - fonts/locales: better OCR on Latin scripts
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    poppler-utils \
+    libreoffice \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-spa \
+    libtesseract-dev \
+    locales \
+    fonts-dejavu \
+ && rm -rf /var/lib/apt/lists/*
+
+# Ensure Tesseract looks in the right place for traineddata
+ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
+
+# Validate that language data is there (fail build if missing)
+RUN test -f "$TESSDATA_PREFIX/eng.traineddata" && \
+    test -f "$TESSDATA_PREFIX/spa.traineddata" && \
+    tesseract --version && tesseract --list-langs
+
+# Python deps
+COPY pyproject.toml /app/
+RUN pip install --upgrade pip && pip install -e .
+
+# App source
+COPY app /app/app
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers"]

@@ -1,0 +1,60 @@
+services:
+  db:
+    build:
+      context: .
+      dockerfile: Dockerfile.pg
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ragdb}
+      POSTGRES_USER: ${POSTGRES_USER:-raguser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragpass}
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-raguser} -d ${POSTGRES_DB:-ragdb}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    environment:
+      DEBUGPY: "1"
+      DATABASE_URL: postgresql+psycopg://raguser:ragpass@db:5432/ragdb
+      EMBEDDING_PROVIDER_BASE_URL: ${EMBEDDING_PROVIDER_BASE_URL:-https://api.openai.com/v1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
+      EMBEDDING_MAX_RETRIES: ${EMBEDDING_MAX_RETRIES:-5}
+      EMBEDDING_BACKOFF_BASE: ${EMBEDDING_BACKOFF_BASE:-0.6}
+      CHAT_PROVIDER_BASE_URL: ${CHAT_PROVIDER_BASE_URL:-https://api.openai.com/v1}
+      CHAT_MODEL: ${CHAT_MODEL:-gpt-4o-mini}
+      API_KEY: ${API_KEY:-replace_me}
+      MAX_CHUNK_TOKENS: ${MAX_CHUNK_TOKENS:-512}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-64}
+      TOP_K: ${TOP_K:-8}
+      RERANK: ${RERANK:-false}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports: ["8000:8000", "5678:5678"]
+    volumes:
+      - ./backend/app:/app/app
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    environment:
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:8000}
+    depends_on:
+      - backend
+    ports: ["3000:3000"]
+    volumes:
+      - ./frontend:/usr/src/app
+
+volumes:
+  dbdata:
