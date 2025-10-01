@@ -12,7 +12,7 @@ class Vector(UserDefinedType):
     cache_ok = True  # allow SQLAlchemy to cache query plans
 
     def get_col_spec(self):
-        return "vector(1536)"
+        return "vector(3072)"
 
     def bind_processor(self, dialect):
         def process(value):
@@ -59,5 +59,5 @@ class Chunk(Base):
     agent_slug: Mapped[str] = mapped_column(String(64))  # <-- no index=True here
     text: Mapped[str] = mapped_column(Text)
     ord: Mapped[int] = mapped_column(Integer, default=0)
-    embedding = Column(Vector(1536), nullable=False)
+    embedding = Column(Vector(3072), nullable=False)
     source_ref: Mapped[str] = mapped_column(String(255))  # filename#page or slide

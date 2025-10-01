@@ -47,7 +47,10 @@ async def upload(
         parsed: List[Tuple[str, str]] = [
             (src, txt) for (src, txt) in parsed_iter if txt and txt.strip()
         ]
-        doc_id, n_chunks = await upsert_document(db, agent_slug, file.filename, ct, parsed)
+        try:
+            doc_id, n_chunks = await upsert_document(db, agent_slug, file.filename, ct, parsed)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
     finally:
         try:
             os.unlink(tmp_path)

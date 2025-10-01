@@ -7,6 +7,7 @@ class Settings:
     EMBEDDING_PROVIDER_BASE_URL = os.getenv("EMBEDDING_PROVIDER_BASE_URL", "https://api.openai.com/v1")
     EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
     EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
+    EMBEDDING_TARGET_DIM = int(os.getenv("EMBEDDING_TARGET_DIM", "3072"))
     HTTP_TIMEOUT_SECONDS = float(os.getenv("HTTP_TIMEOUT_SECONDS", "60"))
 
     CHAT_PROVIDER_BASE_URL = os.getenv("CHAT_PROVIDER_BASE_URL", os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"))
@@ -33,6 +34,7 @@ settings = Settings()
 
 # Validate numeric settings eagerly so deployment issues are caught at startup.
 settings.EMBEDDING_BATCH_SIZE = _as_positive_int("EMBEDDING_BATCH_SIZE", settings.EMBEDDING_BATCH_SIZE)
+settings.EMBEDDING_TARGET_DIM = _as_positive_int("EMBEDDING_TARGET_DIM", settings.EMBEDDING_TARGET_DIM)
 settings.CHAT_MAX_TOKENS = _as_positive_int("CHAT_MAX_TOKENS", settings.CHAT_MAX_TOKENS)
 settings.MAX_CHUNK_CHARS = _as_positive_int("MAX_CHUNK_CHARS", settings.MAX_CHUNK_CHARS)
 settings.CHUNK_OVERLAP = max(0, settings.CHUNK_OVERLAP)

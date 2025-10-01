@@ -1,19 +1,32 @@
 # app/parsing.py
 from __future__ import annotations
 from typing import Iterable, Iterator, Tuple, List
-import os, io, re, zipfile
+import os
+import io
+import re
+import zipfile
 from bs4 import BeautifulSoup
 from striprtf.striprtf import rtf_to_text
 from docx import Document as DocxDocument
 from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 import fitz  # PyMuPDF
 from PIL import Image
 
 
+# ------------------------------
+# Generic helpers
+# ------------------------------
+
 def _clean_text(s: str) -> str:
+    """Normalize whitespace, remove nulls and tame hyphenated line breaks."""
     if not s:
         return ""
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
     s = s.replace("\x00", " ")
+    # Join words split by line breaks with hyphen (e.g., "re-\nsolve" -> "resolve")
+    s = re.sub(r"-\n(?=\w)", "", s)
+    # Collapse runs of whitespace while preserving single newlines
     s = re.sub(r"[ \t]+", " ", s)
     s = re.sub(r"\s+\n", "\n", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
@@ -22,23 +35,47 @@ def _clean_text(s: str) -> str:
 
 def _iter_nonempty(pairs: Iterable[Tuple[str, str]]) -> Iterator[Tuple[str, str]]:
     for src, txt in pairs:
-        t = _clean_text(txt)
-        if t:
-            yield (src, t)
+        cleaned = _clean_text(txt)
+        if cleaned:
+            yield (src, cleaned)
 
 
-# ---------- HTML ----------
+def _decode_bytes(data: bytes) -> str:
+    """Attempt a best-effort decode without introducing external deps."""
+    for enc in ("utf-8", "utf-16", "latin-1"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="ignore")
+
+
+# ------------------------------
+# HTML
+# ------------------------------
 
 def iter_html(path: str) -> Iterator[Tuple[str, str]]:
     with open(path, "rb") as f:
-        soup = BeautifulSoup(f.read(), "html.parser")
+        raw = f.read()
+    try:
+        soup = BeautifulSoup(raw, "lxml")
+    except Exception:
+        soup = BeautifulSoup(raw, "html.parser")
     for bad in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
         bad.decompose()
-    text = soup.get_text("\n")
-    yield (os.path.basename(path), text)
+    text_chunks: List[str] = []
+    for element in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "th", "td"]):
+        content = element.get_text(" ", strip=True)
+        if content:
+            text_chunks.append(content)
+    if not text_chunks:
+        text_chunks.append(soup.get_text("\n"))
+    yield (os.path.basename(path), "\n".join(text_chunks))
 
 
-# ---------- RTF ----------
+# ------------------------------
+# RTF
+# ------------------------------
 
 def _iter_rtf_images(raw: bytes, base_name: str) -> Iterator[Tuple[str, str]]:
     text = raw.decode("latin-1", errors="ignore")
@@ -68,7 +105,9 @@ def iter_rtf(path: str) -> Iterator[Tuple[str, str]]:
     yield from _iter_rtf_images(raw, base)
 
 
-# ---------- DOCX ----------
+# ------------------------------
+# DOCX
+# ------------------------------
 
 def _iter_docx_images(path: str) -> Iterator[Tuple[str, str]]:
     base = os.path.basename(path)
@@ -90,13 +129,13 @@ def _iter_docx_images(path: str) -> Iterator[Tuple[str, str]]:
 def iter_docx(path: str) -> Iterator[Tuple[str, str]]:
     doc = DocxDocument(path)
     parts: List[str] = []
-    for p in doc.paragraphs:
-        if p.text and p.text.strip():
-            parts.append(p.text)
-    for tbl in doc.tables:
-        for row in tbl.rows:
-            cells = [c.text.strip() for c in row.cells]
-            line = " | ".join([c for c in cells if c])
+    for para in doc.paragraphs:
+        if para.text and para.text.strip():
+            parts.append(para.text)
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells]
+            line = " | ".join(c for c in cells if c)
             if line:
                 parts.append(line)
     base = os.path.basename(path)
@@ -105,7 +144,9 @@ def iter_docx(path: str) -> Iterator[Tuple[str, str]]:
     yield from _iter_docx_images(path)
 
 
-# ---------- PPTX ----------
+# ------------------------------
+# PPTX
+# ------------------------------
 
 def _iter_pptx_images(path: str) -> Iterator[Tuple[str, str]]:
     base = os.path.basename(path)
@@ -126,20 +167,27 @@ def _iter_pptx_images(path: str) -> Iterator[Tuple[str, str]]:
 
 def iter_pptx(path: str) -> Iterator[Tuple[str, str]]:
     prs = Presentation(path)
-    for i, slide in enumerate(prs.slides, start=1):
-        lines = []
+    base = os.path.basename(path)
+    for slide_index, slide in enumerate(prs.slides, start=1):
+        lines: List[str] = []
         for shape in slide.shapes:
-            if hasattr(shape, "has_text_frame") and shape.has_text_frame:
-                for para in shape.text_frame.paragraphs:
-                    s = "".join(run.text for run in para.runs).strip()
-                    if s:
-                        lines.append(s)
+            if getattr(shape, "has_text_frame", False) and shape.has_text_frame:
+                for paragraph in shape.text_frame.paragraphs:
+                    text = "".join(run.text for run in paragraph.runs).strip()
+                    if text:
+                        lines.append(text)
+            elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE and hasattr(shape, "image"):
+                ocr = _ocr_image_bytes(shape.image.blob)
+                if ocr:
+                    lines.append(ocr)
         if lines:
-            yield (f"{os.path.basename(path)}#slide={i}", "\n".join(lines))
+            yield (f"{base}#slide={slide_index}", "\n".join(lines))
     yield from _iter_pptx_images(path)
 
 
-# ---------- PDF (text-first; OCR fallback) ----------
+# ------------------------------
+# PDF (text-first; OCR fallback)
+# ------------------------------
 
 def _try_ocr(img: Image.Image) -> str:
     try:
@@ -147,7 +195,7 @@ def _try_ocr(img: Image.Image) -> str:
     except Exception:
         return ""
     try:
-        langs = os.getenv("TESS_LANGS", "eng")
+        langs = os.getenv("TESS_LANGS", "spa")
         return pytesseract.image_to_string(img, lang=langs)
     except Exception:
         try:
@@ -168,25 +216,48 @@ def _ocr_image_bytes(data: bytes) -> str:
         return ""
 
 
+def _extract_pdf_page_text(page: fitz.Page) -> str:
+    blocks = page.get_text("blocks")
+    if blocks:
+        blocks = sorted(blocks, key=lambda b: (round(b[1], 2), round(b[0], 2)))
+        lines = [block[4].strip() for block in blocks if len(block) > 4 and block[4].strip()]
+        if lines:
+            return "\n".join(lines)
+    return page.get_text("text") or ""
+
+
 def iter_pdf(path: str) -> Iterator[Tuple[str, str]]:
-    doc = fitz.open(path)
-    for i, page in enumerate(doc, start=1):
-        txt = page.get_text("text") or ""
-        if txt.strip():
-            yield (f"{os.path.basename(path)}#page={i}", txt)
-        else:
-            pix = page.get_pixmap(dpi=300)
-            with Image.open(io.BytesIO(pix.tobytes("png"))) as raw:
-                img = raw.convert("L")
-                try:
-                    ocr = _try_ocr(img)
-                finally:
-                    img.close()
+    try:
+        doc = fitz.open(path)
+    except Exception:
+        return
+    base = os.path.basename(path)
+    try:
+        for page_index, page in enumerate(doc, start=1):
+            text = _extract_pdf_page_text(page)
+            if text.strip():
+                yield (f"{base}#page={page_index}", text)
+                continue
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            png_bytes = pix.tobytes("png")
+            try:
+                with Image.open(io.BytesIO(png_bytes)) as raw:
+                    img = raw.convert("L")
+                    try:
+                        ocr = _try_ocr(img)
+                    finally:
+                        img.close()
+            except Exception:
+                ocr = ""
             if ocr.strip():
-                yield (f"{os.path.basename(path)}#page={i}", ocr)
+                yield (f"{base}#page={page_index}", ocr)
+    finally:
+        doc.close()
 
 
-# ---------- Router ----------
+# ------------------------------
+# Router
+# ------------------------------
 
 def parse_file(path: str, content_type: str) -> Iterator[Tuple[str, str]]:
     ct = (content_type or "").lower()
@@ -203,5 +274,5 @@ def parse_file(path: str, content_type: str) -> Iterator[Tuple[str, str]]:
         yield from _iter_nonempty(iter_pdf(path))
     else:
         with open(path, "rb") as f:
-            data = f.read().decode("utf-8", errors="ignore")
+            data = _decode_bytes(f.read())
         yield from _iter_nonempty([(os.path.basename(path), data)])
