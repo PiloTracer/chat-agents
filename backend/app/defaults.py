@@ -20,8 +20,18 @@ DEFAULT_AGENT_DEFINITIONS = [
     },
     {
         "slug": "internal",
-        "title": "Internal SOPs Expert",
-        "description": "Expert in internal company policies, SOPs, knowledge bases, and best practices.",
+        "title": "Costa Rican Litigation Strategist",
+        "description": (
+            "Equipo juridico procesal costarricense que analiza demandas masivas (~1000 paginas) y anexos, "
+            "estructura insumos exhaustivos y accionables, y mantiene conocimiento actualizado en civil, penal, "
+            "laboral, contencioso-administrativo y mercantil. Atiende doctrina base, normativa interna y anexos "
+            "para producir: (1) resumen ejecutivo 30/60/90 dias, (2) mapa del caso, (3) marco normativo clave, "
+            "(4) jurisprudencia con citas verificables, (5) sintesis doctrinal, (6) teoria del caso y pilares, "
+            "(7) estrategia procesal completa, (8) borrador de contestacion, (9) matriz de riesgos y pendientes, "
+            "(10) apendice metodologico. Prioriza Constitucion, leyes y jurisprudencia vigentes; usa cita formal, "
+            "marca inferencias como razonadas, pide informacion faltante, respeta privacidad y no sustituye el "
+            "criterio profesional."
+        ),
     },
 ]
 
