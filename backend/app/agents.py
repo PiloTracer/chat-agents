@@ -41,7 +41,7 @@ async def route_question(question: str, agents: Dict[str, str]) -> str:
         "temperature": 0,
     }
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
         response = await client.post(
             f"{settings.CHAT_PROVIDER_BASE_URL}/chat/completions",
             json=payload,

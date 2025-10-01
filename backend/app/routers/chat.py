@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 import httpx
-import os
 
+from app.config import settings
 from app.db import get_db
 from app.rag import search_chunks
 from app.agents import route_question, build_system_prompt
@@ -17,17 +17,13 @@ from app.security import (
     Role,
 )
 
-CHAT_BASE = os.getenv("CHAT_PROVIDER_BASE_URL", os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"))
-CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4o-mini")
-API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
-
 router = APIRouter()
 
 
 class AskPayload(BaseModel):
     question: str
     agent: str | None = None
-    top_k: int = Field(default=8, ge=1, le=20)
+    top_k: int = Field(default=settings.TOP_K, ge=1, le=settings.MAX_CANDIDATE_CHUNKS)
 
 
 @router.post("/ask")
@@ -55,7 +51,8 @@ async def ask(
     if agent_slug not in agent_map:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    hits = await search_chunks(db, agent_slug, question, payload.top_k)
+    top_k = max(1, min(payload.top_k, settings.MAX_CANDIDATE_CHUNKS))
+    hits = await search_chunks(db, agent_slug, question, top_k)
     context_blocks: List[tuple[str, str]] = []
     response_sources: List[str] = []
     for idx, (_, text, source_ref, ordinal, filename) in enumerate(hits, start=1):
@@ -73,22 +70,23 @@ async def ask(
     system_prompt = build_system_prompt(agent_slug, context_blocks, agent_map)
 
     headers = {"Content-Type": "application/json"}
-    if API_KEY:
-        headers["Authorization"] = f"Bearer {API_KEY}"
+    if settings.API_KEY:
+        headers["Authorization"] = f"Bearer {settings.API_KEY}"
 
     completion_payload = {
-        "model": CHAT_MODEL,
+        "model": settings.CHAT_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": question},
         ],
-        "temperature": 0.2,
-        "max_tokens": 1024,
+        "temperature": settings.CHAT_TEMPERATURE,
+        "top_p": settings.CHAT_TOP_P,
+        "max_tokens": settings.CHAT_MAX_TOKENS,
     }
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
         response = await client.post(
-            f"{CHAT_BASE}/chat/completions",
+            f"{settings.CHAT_PROVIDER_BASE_URL}/chat/completions",
             headers=headers,
             json=completion_payload,
         )

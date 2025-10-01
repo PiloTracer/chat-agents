@@ -1,43 +1,49 @@
 # app/embeddings.py
 from __future__ import annotations
 from typing import List
-import os, asyncio
+import asyncio
+
 import httpx
 
-OPENAI_BASE = os.getenv("OPENAI_BASE_URL", os.getenv("OPENAI_BASE", "https://api.openai.com/v1"))
-OPENAI_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
-EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
-BATCH = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
-TIMEOUT = float(os.getenv("HTTP_TIMEOUT_SECONDS", "60"))
+from app.config import settings
+
+EMBED_BASE_URL = settings.EMBEDDING_PROVIDER_BASE_URL.rstrip('/')
+EMBED_MODEL = settings.EMBEDDING_MODEL
+EMBED_BATCH_SIZE = settings.EMBEDDING_BATCH_SIZE
+REQUEST_TIMEOUT = settings.HTTP_TIMEOUT_SECONDS
+API_KEY = settings.API_KEY
 
 def _headers() -> dict:
-    h = {"Content-Type": "application/json"}
-    if OPENAI_KEY:
-        h["Authorization"] = f"Bearer {OPENAI_KEY}"
-    return h
+    headers = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["Authorization"] = f"Bearer {API_KEY}"
+    return headers
 
 async def _embed_chunk(client: httpx.AsyncClient, inputs: List[str]) -> List[List[float]]:
-    url = f"{OPENAI_BASE}/embeddings"
+    url = f"{EMBED_BASE_URL}/embeddings"
     payload = {"model": EMBED_MODEL, "input": inputs}
-    r = await client.post(url, headers=_headers(), json=payload)
-    r.raise_for_status()
-    data = r.json()
-    return [d["embedding"] for d in data["data"]]
+    response = await client.post(url, headers=_headers(), json=payload)
+    response.raise_for_status()
+    data = response.json()
+    return [item["embedding"] for item in data["data"]]
 
 async def embed_texts(texts: List[str]) -> List[List[float]]:
-    out: List[List[float]] = []
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        for i in range(0, len(texts), BATCH):
-            batch = texts[i:i+BATCH]
+    if not texts:
+        return []
+
+    embeddings: List[List[float]] = []
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        for start in range(0, len(texts), EMBED_BATCH_SIZE):
+            batch = texts[start:start + EMBED_BATCH_SIZE]
             delay = 1.0
             for attempt in range(5):
                 try:
-                    vecs = await _embed_chunk(client, batch)
-                    out.extend(vecs)
+                    vectors = await _embed_chunk(client, batch)
+                    embeddings.extend(vectors)
                     break
                 except (httpx.TimeoutException, httpx.RemoteProtocolError, httpx.HTTPStatusError):
                     if attempt == 4:
                         raise
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 10.0)
-    return out
+    return embeddings

@@ -16,7 +16,7 @@ type ChatProps = {
 export default function Chat({ apiBase, role, user }: ChatProps) {
   const [question, setQuestion] = useState<string>("");
   const [selectedAgent, setSelectedAgent] = useState<string>("");
-  const [topK, setTopK] = useState<number>(8);
+  const [topK, setTopK] = useState<number>(12);
   const [answer, setAnswer] = useState<string | null>(null);
   const [sources, setSources] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -122,7 +122,7 @@ export default function Chat({ apiBase, role, user }: ChatProps) {
             <input
               type="number"
               min={1}
-              max={20}
+              max={24}
               value={topK}
               onChange={(event) => setTopK(Number(event.target.value) || 1)}
               style={{ width: 80, marginLeft: 8 }}
