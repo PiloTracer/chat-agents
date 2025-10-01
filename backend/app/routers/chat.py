@@ -1,6 +1,6 @@
 # app/routers/chat.py
 from __future__ import annotations
-from typing import Dict
+from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -56,7 +56,20 @@ async def ask(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     hits = await search_chunks(db, agent_slug, question, payload.top_k)
-    context_blocks = [(source, text) for _, text, source in hits]
+    context_blocks: List[tuple[str, str]] = []
+    response_sources: List[str] = []
+    for idx, (_, text, source_ref, ordinal, filename) in enumerate(hits, start=1):
+        label_parts: List[str] = []
+        if filename:
+            label_parts.append(filename)
+        if source_ref:
+            label_parts.append(source_ref)
+        if ordinal is not None:
+            label_parts.append(f"chunk #{ordinal + 1}")
+        label = " | ".join(label_parts) if label_parts else f"Chunk {idx}"
+        context_blocks.append((label, text))
+        response_sources.append(label)
+
     system_prompt = build_system_prompt(agent_slug, context_blocks, agent_map)
 
     headers = {"Content-Type": "application/json"}
@@ -70,6 +83,7 @@ async def ask(
             {"role": "user", "content": question},
         ],
         "temperature": 0.2,
+        "max_tokens": 1024,
     }
 
     async with httpx.AsyncClient(timeout=60) as client:
@@ -81,12 +95,10 @@ async def ask(
         response.raise_for_status()
         answer = response.json()["choices"][0]["message"]["content"]
 
-    sources = [source for _, _, source in hits]
-
     return {
         "ok": True,
         "agent": agent_slug,
         "answer": answer,
-        "sources": sources,
+        "sources": response_sources,
     }
 

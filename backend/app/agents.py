@@ -61,15 +61,25 @@ def build_system_prompt(
     role = agent_descriptions.get(agent_slug, DEFAULT_AGENT_DESCRIPTIONS.get(agent_slug, "Expert assistant"))
     if context_blocks:
         context = "\n\n".join(
-            f"[{idx}] {source}\n{text}" for idx, (source, text) in enumerate(context_blocks, start=1)
+            f"[{idx}] Source: {source}\n{text}" for idx, (source, text) in enumerate(context_blocks, start=1)
         )
     else:
-        context = "No supporting context was retrieved."
+        context = (
+            "No supporting context was retrieved. Explain that the answer cannot be derived from the uploaded documents and request the missing information."
+        )
 
     return (
-        f"{role}\n"
-        "Answer using ONLY the provided context and cite sources as [#].\n"
+        f"You are {role}.\n"
+        "Provide a comprehensive, deeply analytical answer grounded in the retrieved documents.\n"
+        "Guidelines:\n"
+        "1. Begin with a concise direct answer that cites the most relevant sources.\n"
+        "2. Follow with detailed analysis that compares and explains the evidence from the context. Cite sources using [#].\n"
+        "3. Quote or paraphrase key passages to justify each conclusion.\n"
+        "4. List uncertainties, assumptions, or missing information that could change the answer.\n"
+        "5. Suggest actionable next steps or follow-up questions when helpful.\n"
+        "Use only the context provided. If it is insufficient, say so explicitly and describe what is missing.\n"
+        "\n"
         "Context:\n"
         f"{context}\n"
-        "If unsure, say you don't know."
+        "Every factual statement must reference its supporting source as [#]."
     )

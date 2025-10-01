@@ -70,16 +70,19 @@ async def upsert_document(
     return doc_id, len(texts)
 
 # ---------- search ----------
-async def search_chunks(db: Session, agent_slug: str, query: str, top_k: int = 8) -> List[Tuple[int, str, str]]:
+async def search_chunks(
+    db: Session, agent_slug: str, query: str, top_k: int = 8
+) -> List[Tuple[int, str, str, int | None, str | None]]:
     qvec = (await embed_texts([query]))[0]
     rows = db.execute(
         text(
-            "SELECT id, text, source_ref "
-            "FROM chunks "
-            "WHERE agent_slug = :a "
-            "ORDER BY embedding <-> CAST(:q AS vector) "
+            "SELECT c.id, c.text, c.source_ref, c.ord, d.filename "
+            "FROM chunks AS c "
+            "JOIN documents AS d ON d.id = c.document_id "
+            "WHERE c.agent_slug = :a "
+            "ORDER BY c.embedding <-> CAST(:q AS vector) "
             "LIMIT :k"
         ),
         {"a": agent_slug, "q": qvec, "k": top_k},
     ).all()
-    return [(r[0], r[1], r[2]) for r in rows]
+    return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
