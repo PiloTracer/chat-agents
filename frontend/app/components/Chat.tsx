@@ -16,7 +16,7 @@ type ChatProps = {
 export default function Chat({ apiBase, role, user }: ChatProps) {
   const [question, setQuestion] = useState<string>("");
   const [selectedAgent, setSelectedAgent] = useState<string>("");
-  const [topK, setTopK] = useState<number>(12);
+  const [topK, setTopK] = useState<number>(16);
   const [answer, setAnswer] = useState<string | null>(null);
   const [sources, setSources] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);

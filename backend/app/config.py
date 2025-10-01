@@ -12,12 +12,12 @@ class Settings:
     CHAT_PROVIDER_BASE_URL = os.getenv("CHAT_PROVIDER_BASE_URL", os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"))
     CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1")
     CHAT_TEMPERATURE = float(os.getenv("CHAT_TEMPERATURE", "0.2"))
-    CHAT_TOP_P = float(os.getenv("CHAT_TOP_P", "0.9"))
+    CHAT_TOP_P = float(os.getenv("CHAT_TOP_P", "1.0"))
     CHAT_MAX_TOKENS = int(os.getenv("CHAT_MAX_TOKENS", "2048"))
 
     MAX_CHUNK_CHARS = int(os.getenv("MAX_CHUNK_CHARS", os.getenv("MAX_CHUNK_TOKENS", "900")))
     CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
-    TOP_K = int(os.getenv("TOP_K", "12"))
+    TOP_K = int(os.getenv("TOP_K", "16"))
     MAX_CANDIDATE_CHUNKS = int(os.getenv("MAX_CANDIDATE_CHUNKS", "24"))
     RERANK = os.getenv("RERANK", "false").lower() == "true"
     ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*")
