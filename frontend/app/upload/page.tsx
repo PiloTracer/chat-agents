@@ -1,68 +1,80 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
-
-import { PrincipalPicker } from "../components/PrincipalPicker";
-import RoleSwitch from "../components/RoleSwitch";
+import { LoginForm } from "../components/LoginForm";
 import Uploader from "../components/Uploader";
-import { useDemoPrincipals } from "../hooks/useDemoPrincipals";
+import { useAuth } from "../hooks/useAuth";
 
 export default function UploadPage() {
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
-  const { principals, loading, error } = useDemoPrincipals(apiBase);
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:18000";
+  const {
+    ready,
+    user,
+    token,
+    agents,
+    login,
+    loginPending,
+    loginError,
+    logout,
+    refresh,
+  } = useAuth(apiBase);
 
-  const [user, setUser] = useState<string>("");
-  const [role, setRole] = useState<string>("owner");
+  if (!ready) {
+    return (
+      <main style={{ maxWidth: 480, margin: "80px auto", textAlign: "center" }}>
+        <p>Loading...</p>
+      </main>
+    );
+  }
 
-  const selectedPrincipal = useMemo(
-    () => principals.find((principal) => principal.username === user),
-    [principals, user],
-  );
-
-  useEffect(() => {
-    if (principals.length === 0) {
-      return;
-    }
-    if (!selectedPrincipal) {
-      const first = principals[0];
-      setUser(first.username);
-      setRole(first.role);
-    }
-  }, [principals, selectedPrincipal]);
+  if (!user || !token) {
+    return (
+      <main style={{ maxWidth: 540, margin: "80px auto" }}>
+        <h1 style={{ textAlign: "center" }}>Upload Documents</h1>
+        <LoginForm
+          onSubmit={login}
+          loading={loginPending}
+          error={loginError}
+          title="Sign in to upload"
+        />
+        <section style={{ marginTop: 24, fontSize: 13, color: "#6b7280" }}>
+          <p>
+            Use the same credentials that grant chat access. Owners can upload to
+            any agent; admins are limited to their assigned ones.
+          </p>
+        </section>
+      </main>
+    );
+  }
 
   return (
-    <main
-      style={{ maxWidth: 960, margin: "40px auto", display: "grid", gap: 24 }}
-    >
-      <h1>Upload Documents</h1>
-      <section
+    <main style={{ maxWidth: 960, margin: "40px auto", display: "grid", gap: 24 }}>
+      <header
         style={{
           display: "grid",
-          gap: 12,
+          gap: 8,
           padding: 16,
           border: "1px solid #d1d5db",
           borderRadius: 12,
         }}
       >
-        <h2 style={{ margin: 0 }}>Demo Controls</h2>
-        <PrincipalPicker
-          principals={principals}
-          value={user}
-          onChange={(principal) => {
-            setUser(principal.username);
-            setRole(principal.role);
-          }}
-          loading={loading}
-        />
-        <RoleSwitch value={role} onChange={setRole} disabled={!user} />
-        {selectedPrincipal && (
-          <p style={{ fontSize: 13, color: "#374151", margin: 0 }}>
-            Accessible agents:{" "}
-            {selectedPrincipal.agentSlugs.join(", ") || "(none)"}
-          </p>
-        )}
-        {error && <p style={{ color: "#b91c1c", margin: 0 }}>{error}</p>}
-      </section>
-      <Uploader apiBase={apiBase} role={role} user={user} />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h1 style={{ margin: 0 }}>Upload Documents</h1>
+          <button type="button" onClick={logout}>
+            Sign out
+          </button>
+        </div>
+        <p style={{ margin: 0, color: "#374151" }}>
+          Signed in as <strong>{user.username}</strong> ({user.role}).
+        </p>
+        <p style={{ margin: 0, color: "#4b5563", fontSize: 14 }}>
+          Accessible agents: {agents.length ? agents.join(", ") : "(none)"}
+        </p>
+        <div>
+          <button type="button" onClick={refresh} style={{ fontSize: 13 }}>
+            Refresh access
+          </button>
+        </div>
+      </header>
+      <Uploader apiBase={apiBase} token={token} />
       <a href="/" style={{ justifySelf: "start" }}>
         &lt;- Back
       </a>

@@ -20,17 +20,23 @@ interface UseAgentsResult {
 
 export function useAgents(
   apiBase: string,
-  role: string,
-  user: string,
+  token: string | null,
 ): UseAgentsResult {
   const [agents, setAgents] = useState<AgentSummary[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState<number>(0);
 
   useEffect(() => {
+    if (!token) {
+      setAgents([]);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
     let cancelled = false;
-    const token = refreshToken;
+    const tokenSnapshot = refreshToken;
 
     async function fetchAgents() {
       setLoading(true);
@@ -38,20 +44,19 @@ export function useAgents(
       try {
         const response = await axios.get<AgentSummary[]>(`${apiBase}/agents`, {
           headers: {
-            "X-Role": role,
-            "X-User": user,
+            Authorization: `Bearer ${token}`,
           },
         });
-        if (!cancelled && token === refreshToken) {
+        if (!cancelled && tokenSnapshot === refreshToken) {
           setAgents(response.data ?? []);
         }
       } catch (error) {
-        if (!cancelled && token === refreshToken) {
+        if (!cancelled && tokenSnapshot === refreshToken) {
           setAgents([]);
           setError(extractErrorMessage(error, "Failed to load agents"));
         }
       } finally {
-        if (!cancelled && token === refreshToken) {
+        if (!cancelled && tokenSnapshot === refreshToken) {
           setLoading(false);
         }
       }
@@ -62,12 +67,12 @@ export function useAgents(
     return () => {
       cancelled = true;
     };
-  }, [apiBase, role, user, refreshToken]);
+  }, [apiBase, token, refreshToken]);
 
   return {
     agents,
     loading,
     error,
-    refresh: () => setRefreshToken((token) => token + 1),
+    refresh: () => setRefreshToken((value) => value + 1),
   };
 }

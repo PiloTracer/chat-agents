@@ -1,5 +1,6 @@
 import os
 
+
 class Settings:
     DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://raguser:ragpass@db:5432/ragdb")
     API_KEY = os.getenv("API_KEY", "")
@@ -23,6 +24,11 @@ class Settings:
     RERANK = os.getenv("RERANK", "false").lower() == "true"
     ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*")
 
+    AUTH_TOKEN_SECRET = os.getenv("AUTH_TOKEN_SECRET", "change-me")
+    AUTH_TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", "86400"))
+    AUTH_USERS = os.getenv("AUTH_USERS", "username_changeme:password_changeme:role_changeme,username2_changeme:password2_changeme:role2_changeme")
+    AUTH_HASH_ITERATIONS = int(os.getenv("AUTH_HASH_ITERATIONS", "120000"))
+
 
 def _as_positive_int(name: str, value: int) -> int:
     if value <= 0:
@@ -41,9 +47,12 @@ settings.CHUNK_OVERLAP = max(0, settings.CHUNK_OVERLAP)
 settings.TOP_K = _as_positive_int("TOP_K", settings.TOP_K)
 settings.MAX_CANDIDATE_CHUNKS = _as_positive_int("MAX_CANDIDATE_CHUNKS", settings.MAX_CANDIDATE_CHUNKS)
 settings.HTTP_TIMEOUT_SECONDS = max(1.0, settings.HTTP_TIMEOUT_SECONDS)
+settings.AUTH_TOKEN_TTL_SECONDS = _as_positive_int("AUTH_TOKEN_TTL_SECONDS", settings.AUTH_TOKEN_TTL_SECONDS)
+settings.AUTH_HASH_ITERATIONS = _as_positive_int("AUTH_HASH_ITERATIONS", settings.AUTH_HASH_ITERATIONS)
 
 if settings.CHUNK_OVERLAP >= settings.MAX_CHUNK_CHARS:
     settings.CHUNK_OVERLAP = max(0, settings.MAX_CHUNK_CHARS // 4)
 
 if settings.TOP_K > settings.MAX_CANDIDATE_CHUNKS:
     settings.MAX_CANDIDATE_CHUNKS = settings.TOP_K
+

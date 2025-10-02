@@ -102,3 +102,11 @@ DEMO_PRINCIPAL_OPTIONS = [
     }
     for principal in DEFAULT_PRINCIPALS
 ]
+
+DEFAULT_PRINCIPAL_CREDENTIALS = {
+    "owner": "ownerpass",
+    "demo": "demo123",
+    "admin-local": "local123",
+    "admin-intl": "intl123",
+    "admin-logistics": "logistics123",
+}

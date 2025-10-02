@@ -9,11 +9,10 @@ import { AgentPicker } from "./AgentPicker";
 
 type ChatProps = {
   apiBase: string;
-  role: string;
-  user: string;
+  token: string | null;
 };
 
-export default function Chat({ apiBase, role, user }: ChatProps) {
+export default function Chat({ apiBase, token }: ChatProps) {
   const [question, setQuestion] = useState<string>("");
   const [selectedAgent, setSelectedAgent] = useState<string>("");
   const [topK, setTopK] = useState<number>(16);
@@ -26,7 +25,7 @@ export default function Chat({ apiBase, role, user }: ChatProps) {
     agents,
     loading: loadingAgents,
     error: agentsError,
-  } = useAgents(apiBase, role, user);
+  } = useAgents(apiBase, token);
 
   const sourceEntries = useMemo(() => {
     const occurrences = new Map<string, number>();
@@ -47,13 +46,15 @@ export default function Chat({ apiBase, role, user }: ChatProps) {
       setError("Please enter a question before asking.");
       return;
     }
+    if (!token) {
+      setError("Sign in again to ask questions.");
+      return;
+    }
     if (loadingAgents) {
       return;
     }
     if (!agents.length) {
-      setError(
-        "No agents available for this user. Adjust the role or ACL settings.",
-      );
+      setError("No agents available for this account.");
       return;
     }
 
@@ -72,8 +73,7 @@ export default function Chat({ apiBase, role, user }: ChatProps) {
         },
         {
           headers: {
-            "X-Role": role,
-            "X-User": user,
+            Authorization: `Bearer ${token}`,
           },
         },
       );
@@ -100,6 +100,7 @@ export default function Chat({ apiBase, role, user }: ChatProps) {
             onChange={(event) => setQuestion(event.target.value)}
             placeholder="Ask a question..."
             style={{ flex: 1 }}
+            disabled={!token}
           />
         </label>
         <div
@@ -126,12 +127,13 @@ export default function Chat({ apiBase, role, user }: ChatProps) {
               value={topK}
               onChange={(event) => setTopK(Number(event.target.value) || 1)}
               style={{ width: 80, marginLeft: 8 }}
+              disabled={!token}
             />
           </label>
           <button
             type="button"
             onClick={submitQuestion}
-            disabled={isSubmitting || loadingAgents}
+            disabled={isSubmitting || loadingAgents || !token}
           >
             {isSubmitting ? "Asking..." : "Ask"}
           </button>

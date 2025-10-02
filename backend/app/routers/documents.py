@@ -1,16 +1,18 @@
 # app/routers/documents.py
 from __future__ import annotations
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 import os, shutil, tempfile
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from sqlalchemy.orm import Session
 
+from app.auth import Principal
 from app.db import get_db
 from app.parsing import parse_file
 from app.rag import upsert_document
 from app.security import ensure_agent_access, require_role, Role
 
 router = APIRouter()
+
 
 def _norm_content_type(filename: str, content_type: str | None) -> str:
     ct = (content_type or "").lower().strip()
@@ -27,11 +29,12 @@ def _norm_content_type(filename: str, content_type: str | None) -> str:
         return "text/html"
     return ct or "application/octet-stream"
 
+
 @router.post("/upload")
 async def upload(
     agent_slug: str = Form(...),
     file: UploadFile = File(...),
-    principal: Dict[str, str] = Depends(require_role(Role.ADMIN)),
+    principal: Principal = Depends(require_role(Role.ADMIN)),
     db: Session = Depends(get_db),
 ):
     ensure_agent_access(db, principal, agent_slug)

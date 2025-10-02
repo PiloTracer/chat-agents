@@ -1,11 +1,12 @@
 # app/routers/chat.py
 from __future__ import annotations
-from typing import Dict, List
+from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 import httpx
 
+from app.auth import Principal
 from app.config import settings
 from app.db import get_db
 from app.rag import search_chunks
@@ -29,7 +30,7 @@ class AskPayload(BaseModel):
 @router.post("/ask")
 async def ask(
     payload: AskPayload,
-    principal: Dict[str, str] = Depends(require_role(Role.ADMIN)),
+    principal: Principal = Depends(require_role(Role.ADMIN)),
     db: Session = Depends(get_db),
 ):
     question = payload.question.strip()
@@ -99,4 +100,3 @@ async def ask(
         "answer": answer,
         "sources": response_sources,
     }
-

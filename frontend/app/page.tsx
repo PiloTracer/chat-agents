@@ -1,68 +1,66 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
-
 import Chat from "./components/Chat";
-import { PrincipalPicker } from "./components/PrincipalPicker";
-import RoleSwitch from "./components/RoleSwitch";
-import { useDemoPrincipals } from "./hooks/useDemoPrincipals";
+import { LoginForm } from "./components/LoginForm";
+import { useAuth } from "./hooks/useAuth";
 
 export default function Home() {
-  const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
-  const { principals, loading, error } = useDemoPrincipals(apiBase);
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:18000";
+  const { ready, user, token, agents, login, loginPending, loginError, logout, refresh } =
+    useAuth(apiBase);
 
-  const [user, setUser] = useState<string>("");
-  const [role, setRole] = useState<string>("owner");
+  if (!ready) {
+    return (
+      <main style={{ maxWidth: 480, margin: "80px auto", textAlign: "center" }}>
+        <p>Loading...</p>
+      </main>
+    );
+  }
 
-  const selectedPrincipal = useMemo(
-    () => principals.find((principal) => principal.username === user),
-    [principals, user],
-  );
-
-  useEffect(() => {
-    if (principals.length === 0) {
-      return;
-    }
-    if (!selectedPrincipal) {
-      const first = principals[0];
-      setUser(first.username);
-      setRole(first.role);
-    }
-  }, [principals, selectedPrincipal]);
+  if (!user || !token) {
+    return (
+      <main style={{ maxWidth: 540, margin: "80px auto" }}>
+        <h1 style={{ textAlign: "center" }}>Multi-Agent RAG Chat</h1>
+        <LoginForm onSubmit={login} loading={loginPending} error={loginError} />
+        <section style={{ marginTop: 24, fontSize: 13, color: "#6b7280" }}>
+          <p>
+            Default demo users are provisioned automatically. Update the credentials
+            by setting the <code>AUTH_USERS</code> environment variable.
+          </p>
+        </section>
+      </main>
+    );
+  }
 
   return (
-    <main
-      style={{ maxWidth: 960, margin: "40px auto", display: "grid", gap: 24 }}
-    >
-      <h1>Multi-Agent RAG Chat</h1>
-      <section
+    <main style={{ maxWidth: 960, margin: "40px auto", display: "grid", gap: 24 }}>
+      <header
         style={{
           display: "grid",
-          gap: 12,
+          gap: 8,
           padding: 16,
           border: "1px solid #d1d5db",
           borderRadius: 12,
         }}
       >
-        <h2 style={{ margin: 0 }}>Demo Controls</h2>
-        <PrincipalPicker
-          principals={principals}
-          value={user}
-          onChange={(principal) => {
-            setUser(principal.username);
-            setRole(principal.role);
-          }}
-          loading={loading}
-        />
-        <RoleSwitch value={role} onChange={setRole} disabled={!user} />
-        {selectedPrincipal && (
-          <p style={{ fontSize: 13, color: "#374151", margin: 0 }}>
-            Accessible agents:{" "}
-            {selectedPrincipal.agentSlugs.join(", ") || "(none)"}
-          </p>
-        )}
-        {error && <p style={{ color: "#b91c1c", margin: 0 }}>{error}</p>}
-      </section>
-      <Chat apiBase={apiBase} role={role} user={user} />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h1 style={{ margin: 0 }}>Multi-Agent RAG Chat</h1>
+          <button type="button" onClick={logout}>
+            Sign out
+          </button>
+        </div>
+        <p style={{ margin: 0, color: "#374151" }}>
+          Signed in as <strong>{user.username}</strong> ({user.role}).
+        </p>
+        <p style={{ margin: 0, color: "#4b5563", fontSize: 14 }}>
+          Accessible agents: {agents.length ? agents.join(", ") : "(none)"}
+        </p>
+        <div>
+          <button type="button" onClick={refresh} style={{ fontSize: 13 }}>
+            Refresh access
+          </button>
+        </div>
+      </header>
+      <Chat apiBase={apiBase} token={token} />
       <a href="/upload" style={{ justifySelf: "start" }}>
         Go to Upload
       </a>

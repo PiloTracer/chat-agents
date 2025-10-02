@@ -9,11 +9,10 @@ import { AgentPicker } from "./AgentPicker";
 
 type UploaderProps = {
   apiBase: string;
-  role: string;
-  user: string;
+  token: string | null;
 };
 
-export default function Uploader({ apiBase, role, user }: UploaderProps) {
+export default function Uploader({ apiBase, token }: UploaderProps) {
   const [file, setFile] = useState<File | null>(null);
   const [agent, setAgent] = useState<string>("");
   const [status, setStatus] = useState<string>("");
@@ -25,7 +24,7 @@ export default function Uploader({ apiBase, role, user }: UploaderProps) {
     loading: loadingAgents,
     error: agentsError,
     refresh,
-  } = useAgents(apiBase, role, user);
+  } = useAgents(apiBase, token);
 
   useEffect(() => {
     if (!agent && agents.length > 0) {
@@ -34,6 +33,10 @@ export default function Uploader({ apiBase, role, user }: UploaderProps) {
   }, [agent, agents]);
 
   const upload = async () => {
+    if (!token) {
+      setError("Sign in again to upload documents.");
+      return;
+    }
     if (!file) {
       setError("Pick a document to upload first.");
       return;
@@ -57,8 +60,7 @@ export default function Uploader({ apiBase, role, user }: UploaderProps) {
         formData,
         {
           headers: {
-            "X-Role": role,
-            "X-User": user,
+            Authorization: `Bearer ${token}`,
           },
         },
       );
@@ -99,11 +101,12 @@ export default function Uploader({ apiBase, role, user }: UploaderProps) {
           type="file"
           onChange={(event) => setFile(event.target.files?.[0] ?? null)}
           multiple={false}
+          disabled={!token}
         />
         <button
           type="button"
           onClick={upload}
-          disabled={isUploading || loadingAgents || !agents.length}
+          disabled={isUploading || loadingAgents || !agents.length || !token}
         >
           {isUploading ? "Uploading..." : "Upload"}
         </button>

@@ -10,7 +10,7 @@ from app.config import settings
 from app.defaults import DEFAULT_AGENT_DEFINITIONS, DEFAULT_USERS, DEFAULT_AGENT_ACLS
 from app.models import Base, Agent, User, AgentACL
 from app.db import init_db, session_scope
-from app.routers import documents, chat, agents as agents_router, auth_stub
+from app.routers import documents, chat, agents as agents_router, auth
 
 DEBUGPY = os.getenv("DEBUGPY", "0") in {"1", "true", "True", "YES", "yes"}
 
@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
             debugpy.listen(("0.0.0.0", 5678))
             # Optional: block startup until the IDE attaches
             # debugpy.wait_for_client()
-            print("🔌 debugpy listening on 0.0.0.0:5678")
+            print("debugpy listening on 0.0.0.0:5678")
         except Exception as e:
             print(f"debugpy failed to start: {e}")
 
@@ -90,7 +90,7 @@ if allow_all_origins:
     cors_kwargs.update(allow_origins=["*"], allow_credentials=False)
 else:
     if not allowed_origins:
-        allowed_origins = ["http://localhost:3000"]
+        allowed_origins = ["http://localhost:3000", "http://localhost:13000"]
     cors_kwargs.update(allow_origins=allowed_origins, allow_credentials=True)
 
 app.add_middleware(CORSMiddleware, **cors_kwargs)
@@ -103,4 +103,4 @@ def healthz():
 app.include_router(documents.router, prefix="/documents", tags=["documents"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(agents_router.router)
-app.include_router(auth_stub.router)
+app.include_router(auth.router)
