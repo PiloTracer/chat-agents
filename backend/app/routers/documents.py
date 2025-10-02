@@ -1,8 +1,9 @@
 # app/routers/documents.py
 from __future__ import annotations
 from typing import List, Tuple, Dict
-import os, shutil, tempfile, re
+import os, shutil, tempfile, re, io
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.auth import Principal
@@ -11,6 +12,7 @@ from app.parsing import parse_file
 from app.rag import upsert_document
 from app.security import ensure_agent_access, require_role, Role
 from app.models import Document, Chunk
+import fitz  # PyMuPDF
 from fastapi.responses import Response
 import io
 import fitz  # PyMuPDF
@@ -141,16 +143,31 @@ def document_map(document_id: int, db: Session = Depends(get_db)):
     ]
     if no_page:
         page_list.append({"page": None, "chunks": sorted(no_page, key=lambda x: int(x["ord"]))})
+    # Detect missing pages (gaps)
+    page_numbers = sorted([p for p in pages.keys() if isinstance(p, int)])
+    missing_pages: List[int] = []
+    if page_numbers:
+        first = page_numbers[0]
+        last = page_numbers[-1]
+        have = set(page_numbers)
+        missing_pages = [n for n in range(first, last + 1) if n not in have]
     return {
         "ok": True,
         "document": {"id": doc.id, "filename": doc.filename, "agent_slug": doc.agent_slug},
         "pages": page_list,
         "totals": {"chunks": len(rows), "pages": len(page_list)},
+        "missing_pages": missing_pages,
+        "continuity_ok": len(missing_pages) == 0,
     }
 
 
 @router.get("/{document_id}/consolidated")
-def document_consolidated(document_id: int, db: Session = Depends(get_db)):
+def document_consolidated(
+    document_id: int,
+    start: int | None = None,
+    end: int | None = None,
+    db: Session = Depends(get_db),
+):
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -171,6 +188,10 @@ def document_consolidated(document_id: int, db: Session = Depends(get_db)):
             no_page.append(getattr(r, "text", "") or "")
     lines: List[str] = []
     for page_no, texts in sorted(pages.items(), key=lambda kv: kv[0]):
+        if start is not None and page_no < start:
+            continue
+        if end is not None and page_no > end:
+            continue
         lines.append(f"=== Page {page_no} ===")
         lines.append("\n\n".join(texts))
         lines.append("")
@@ -183,6 +204,145 @@ def document_consolidated(document_id: int, db: Session = Depends(get_db)):
         "document": {"id": doc.id, "filename": doc.filename, "agent_slug": doc.agent_slug},
         "text": "\n".join(lines).strip(),
     }
+
+
+def _build_consolidated_text(db: Session, document_id: int, start: int | None = None, end: int | None = None) -> Tuple[Document, str]:
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    rows = (
+        db.query(Chunk)
+        .filter(Chunk.document_id == document_id)
+        .order_by(Chunk.ord.asc())
+        .all()
+    )
+    pages: Dict[int, List[str]] = {}
+    no_page: List[str] = []
+    for r in rows:
+        p = _extract_page(getattr(r, "source_ref", "") or "")
+        if p is not None:
+            pages.setdefault(p, []).append(getattr(r, "text", "") or "")
+        else:
+            no_page.append(getattr(r, "text", "") or "")
+    lines: List[str] = []
+    for page_no, texts in sorted(pages.items(), key=lambda kv: kv[0]):
+        if start is not None and page_no < start:
+            continue
+        if end is not None and page_no > end:
+            continue
+        lines.append(f"=== Page {page_no} ===")
+        lines.append("\n\n".join(texts))
+        lines.append("")
+    if no_page and start is None and end is None:
+        lines.append("=== Unpaged ===")
+        lines.append("\n\n".join(no_page))
+        lines.append("")
+    return doc, "\n".join(lines).strip()
+
+
+@router.get("/{document_id}/pages")
+def document_pages(
+    document_id: int,
+    start: int | None = None,
+    end: int | None = None,
+    db: Session = Depends(get_db),
+):
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    rows = (
+        db.query(Chunk)
+        .filter(Chunk.document_id == document_id)
+        .order_by(Chunk.ord.asc())
+        .all()
+    )
+    output: List[Dict[str, object]] = []
+    for r in rows:
+        p = _extract_page(getattr(r, "source_ref", "") or "")
+        if p is not None:
+            if start is not None and p < start:
+                continue
+            if end is not None and p > end:
+                continue
+        output.append({
+            "chunk_id": r.id,
+            "document_id": r.document_id,
+            "page_number": p,
+            "ord": r.ord or 0,
+            "source_file": doc.filename,
+            "source_ref": getattr(r, "source_ref", "") or "",
+            "text": getattr(r, "text", "") or "",
+        })
+    return {"ok": True, "document": {"id": doc.id, "filename": doc.filename, "agent_slug": doc.agent_slug}, "chunks": output}
+
+
+@router.get("/{document_id}/verify")
+def document_verify(
+    document_id: int,
+    start: int | None = None,
+    end: int | None = None,
+    db: Session = Depends(get_db),
+):
+    mapping = document_map(document_id, db)
+    pages = [p.get("page") for p in mapping.get("pages", []) if isinstance(p.get("page"), int)]
+    if not pages:
+        return {"ok": True, "continuity_ok": True, "missing_pages": []}
+    first = min(pages) if start is None else start
+    last = max(pages) if end is None else end
+    have = set(p for p in pages if (start is None or p >= start) and (end is None or p <= end))
+    missing = [n for n in range(first, last + 1) if n not in have]
+    return {"ok": True, "from": first, "to": last, "missing_pages": missing, "continuity_ok": len(missing) == 0}
+
+
+@router.get("/{document_id}/export.{fmt}")
+def document_export(
+    document_id: int,
+    fmt: str,
+    start: int | None = None,
+    end: int | None = None,
+    db: Session = Depends(get_db),
+):
+    doc, text = _build_consolidated_text(db, document_id, start, end)
+
+    filename_base = (doc.filename or f"document-{doc.id}").rsplit("/", 1)[-1]
+    if fmt.lower() in {"txt", "text"}:
+        data = text.encode("utf-8")
+        headers = {"Content-Disposition": f"attachment; filename=\"{filename_base}.txt\""}
+        return Response(content=data, media_type="text/plain; charset=utf-8", headers=headers)
+
+    if fmt.lower() in {"md", "markdown"}:
+        md_lines = [f"# {filename_base}", "", text]
+        data = "\n".join(md_lines).encode("utf-8")
+        headers = {"Content-Disposition": f"attachment; filename=\"{filename_base}.md\""}
+        return Response(content=data, media_type="text/markdown; charset=utf-8", headers=headers)
+
+    if fmt.lower() == "pdf":
+        # Render a simple PDF using PyMuPDF
+        page_w, page_h = 595, 842  # A4 in points
+        margin = 36
+        line_h = 14
+        max_lines = max(1, int((page_h - 2 * margin) / line_h))
+        lines = text.split("\n")
+
+        doc_pdf = fitz.open()
+        cursor = 0
+        while cursor < len(lines):
+            page = doc_pdf.new_page(width=page_w, height=page_h)
+            start_idx = cursor
+            end_idx = min(len(lines), start_idx + max_lines)
+            chunk = "\n".join(lines[start_idx:end_idx])
+            rect = fitz.Rect(margin, margin, page_w - margin, page_h - margin)
+            page.insert_textbox(rect, chunk, fontsize=10, fontname="helv", align=0)
+            cursor = end_idx
+
+        buf = io.BytesIO()
+        doc_pdf.save(buf)
+        doc_pdf.close()
+        data = buf.getvalue()
+        headers = {"Content-Disposition": f"attachment; filename=\"{filename_base}.pdf\""}
+        return Response(content=data, media_type="application/pdf", headers=headers)
+
+    raise HTTPException(status_code=400, detail="Unsupported format. Use txt, md or pdf.")
 
 
 def _build_consolidated_text(db: Session, document_id: int) -> Tuple[Document, str]:

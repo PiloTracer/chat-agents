@@ -12,6 +12,7 @@ from app.config import settings
 from app.db import get_db
 from app.rag import search_chunks
 from app.agents import route_question, build_system_prompt
+from app.models import Chunk, Document
 from app.security import (
     ensure_agent_access,
     get_accessible_agents,
@@ -26,6 +27,8 @@ class AskPayload(BaseModel):
     question: str
     agent: str | None = None
     top_k: int = Field(default=settings.TOP_K, ge=1, le=settings.MAX_CANDIDATE_CHUNKS)
+    extended: bool = Field(default=False, description="Enable extended context by including adjacent pages")
+    page_window: int = Field(default=1, ge=0, le=5)
 
 
 @router.post("/ask")
@@ -57,6 +60,40 @@ async def ask(
     # Each hit: (chunk_id, document_id, text, source_ref, ord, filename)
     hits = await search_chunks(db, agent_slug, question, top_k)
 
+    # Optionally expand context with adjacent pages for each hit
+    if payload.extended and hits:
+        # Build doc -> all chunks map (id, doc, text, ref, ord, filename)
+        doc_ids = list({h[1] for h in hits})
+        rows = (
+            db.query(Chunk.id, Chunk.document_id, Chunk.text, Chunk.source_ref, Chunk.ord, Document.filename)
+            .join(Document, Document.id == Chunk.document_id)
+            .filter(Chunk.document_id.in_(doc_ids))
+            .order_by(Chunk.ord.asc())
+            .all()
+        )
+        def _page_of(ref: str) -> int:
+            m = re.search(r"(?:^|#)(page|slide|para|sec)=(\d+)", ref or "")
+            return int(m.group(2)) if m else -1
+        # Index by doc and page
+        by_doc_page: dict[int, dict[int, list[tuple[int,int,str,str,int,str]]]] = {}
+        for r in rows:
+            doc_id = int(r[1])
+            page_no = _page_of(r[3] or "")
+            d = by_doc_page.setdefault(doc_id, {})
+            d.setdefault(page_no, []).append((int(r[0]), int(r[1]), str(r[2]), str(r[3]) if r[3] else "", int(r[4] or 0), str(r[5]) if r[5] else ""))
+
+        selected: dict[int, tuple[int,int,str,str,int,str]] = {h[0]: h for h in hits}
+        for h in hits:
+            doc_id = h[1]
+            page_no = _page_of(h[3] or "")
+            if doc_id not in by_doc_page:
+                continue
+            for p in range(page_no - payload.page_window, page_no + payload.page_window + 1):
+                for row in by_doc_page.get(doc_id, {}).get(p, []):
+                    selected[row[0]] = row
+        # Replace hits with expanded selection (preserve doc grouping)
+        hits = list(selected.values())
+
     # Group hits by document to maintain logical sequence within each file.
     groups: dict[int, list[tuple[int, int, str, str, int, str]]] = {}
     doc_order: list[int] = []
@@ -71,6 +108,7 @@ async def ask(
     # and merging consecutive ords into a single block for continuity.
     context_blocks: List[tuple[str, str]] = []
     response_sources: List[str] = []
+    sources_meta: List[dict] = []
 
     for doc_id in doc_order:
         def _page_of(ref: str) -> int:
@@ -134,6 +172,18 @@ async def ask(
 
             context_blocks.append((label, text))
             response_sources.append(label)
+            chunk_ids = [int(r[0]) for r in rows[run_start : run_end + 1]]
+            meta = {
+                "document_id": int(doc_id),
+                "filename": filename,
+                "page_start": int(page_first) if page_first >= 0 else None,
+                "page_end": int(page_last) if page_last >= 0 else None,
+                "ord_start": ord_first,
+                "ord_end": ord_last,
+                "chunk_ids": chunk_ids,
+                "label": label,
+            }
+            sources_meta.append(meta)
             run_start = run_end + 1
 
     system_prompt = build_system_prompt(agent_slug, context_blocks, agent_map)
@@ -167,4 +217,5 @@ async def ask(
         "agent": agent_slug,
         "answer": answer,
         "sources": response_sources,
+        "sources_meta": sources_meta,
     }
