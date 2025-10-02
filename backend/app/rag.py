@@ -169,13 +169,17 @@ async def upsert_document(
 # ---------- search ----------
 async def search_chunks(
     db: Session, agent_slug: str, query: str, top_k: int | None = None
-) -> List[Tuple[int, str, str, int | None, str | None]]:
+) -> List[Tuple[int, int, str, str, int, str]]:
+    """Return nearest chunks for a query with document metadata.
+
+    Tuple fields: (chunk_id, document_id, text, source_ref, ord, filename)
+    """
     desired = top_k or settings.TOP_K
     candidate_limit = max(desired, settings.MAX_CANDIDATE_CHUNKS)
     qvec = (await embed_texts([query]))[0]
     rows = db.execute(
         text(
-            "SELECT c.id, c.text, c.source_ref, c.ord, d.filename "
+            "SELECT c.id, c.document_id, c.text, c.source_ref, c.ord, d.filename "
             "FROM chunks AS c "
             "JOIN documents AS d ON d.id = c.document_id "
             "WHERE c.agent_slug = :a "
@@ -184,5 +188,8 @@ async def search_chunks(
         ),
         {"a": agent_slug, "q": qvec, "k": candidate_limit},
     ).all()
-    results = [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+    results: List[Tuple[int, int, str, str, int, str]] = [
+        (int(r[0]), int(r[1]), str(r[2]), str(r[3]) if r[3] is not None else "", int(r[4] or 0), str(r[5]) if r[5] is not None else "")
+        for r in rows
+    ]
     return results[:desired]
