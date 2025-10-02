@@ -8,26 +8,117 @@ import re
 from app.config import settings
 from app.embeddings import embed_texts
 
-# ---------- chunker ----------
+# ---------- advanced chunker ----------
+# Sentence splitter that also treats an ellipsis (\u2026) as potential boundary.
+_SENT_SPLIT_RE = re.compile(r"(?<=[" + "\u2026" + r".!?])\s+(?=[\(\[\"'A-Z0-9])")
+_BLANKLINE_RE = re.compile(r"\n\s*\n+")
+
+
+def _split_paragraphs(s: str) -> List[str]:
+    s = s.replace("\r\n", "\n").replace("\r", "\n").strip()
+    parts = [p.strip() for p in _BLANKLINE_RE.split(s) if p.strip()]
+    return parts if parts else ([s] if s else [])
+
+
+def _split_sentences(p: str) -> List[str]:
+    pieces = [seg.strip() for seg in _SENT_SPLIT_RE.split(p) if seg.strip()]
+    return pieces if pieces else ([p] if p else [])
+
+
+def _take_tail_overlap(text: str, overlap_chars: int) -> str:
+    if overlap_chars <= 0 or not text:
+        return ""
+    window = text[-overlap_chars:]
+    m = re.search(r"[" + "\u2026" + r".!?]\s+", window)
+    if m:
+        return window[m.end():]
+    nl = window.rfind("\n")
+    if nl != -1 and nl + 1 < len(window):
+        return window[nl + 1 :]
+    return window
+
+
 def chunk_text(s: str, max_chars: int | None = None, overlap: int | None = None) -> List[str]:
-    max_chars = max_chars or settings.MAX_CHUNK_CHARS
+    """Greedy, structure-aware chunking.
+
+    - Respects paragraphs and sentence boundaries when possible.
+    - Uses character-based sizing for simplicity and speed.
+    - Adds textual overlap between chunks for context continuity.
+    """
+    max_chars = max(1, (max_chars or settings.MAX_CHUNK_CHARS))
     overlap = settings.CHUNK_OVERLAP if overlap is None else overlap
-    max_chars = max(1, max_chars)
     overlap = max(0, min(overlap, max_chars - 1))
 
-    s = re.sub(r"\n{3,}", "\n\n", s.strip())
-    parts: List[str] = []
-    start = 0
-    n = len(s)
-    while start < n:
-        end = min(n, start + max_chars)
-        part = s[start:end].strip()
-        if part:
-            parts.append(part)
-        if end == n:
-            break
-        start = max(0, end - overlap)
-    return parts
+    paragraphs = _split_paragraphs(s)
+    pieces: List[str] = []
+
+    carry = ""
+    buf: List[str] = []
+    buf_len = 0
+
+    def flush() -> None:
+        nonlocal carry, buf, buf_len
+        if not buf:
+            return
+        joined = (carry + ("\n" if carry and buf else "") + "\n".join(buf)).strip()
+        if joined:
+            pieces.append(joined)
+            carry = _take_tail_overlap(joined, overlap)
+        else:
+            carry = ""
+        buf = []
+        buf_len = 0
+
+    for para in paragraphs:
+        sentences = _split_sentences(para)
+        for sent in sentences:
+            unit = sent
+            unit_len = len(unit) + (1 if buf else 0)
+            if not buf and len(carry) + len(unit) > max_chars:
+                start = 0
+                while start < len(unit):
+                    remain = max_chars - len(carry) - (1 if carry else 0)
+                    chunk = (carry + ("\n" if carry else "") + unit[start:start + remain]).strip()
+                    if chunk:
+                        pieces.append(chunk)
+                        carry = _take_tail_overlap(chunk, overlap)
+                    start += remain
+                continue
+
+            if len(carry) + buf_len + unit_len <= max_chars:
+                if buf:
+                    buf.append(unit)
+                    buf_len += unit_len
+                else:
+                    buf.append(unit)
+                    buf_len = unit_len
+            else:
+                flush()
+                if len(carry) + len(unit) > max_chars:
+                    start = 0
+                    while start < len(unit):
+                        remain = max_chars - len(carry) - (1 if carry else 0)
+                        chunk = (carry + ("\n" if carry else "") + unit[start:start + remain]).strip()
+                        if chunk:
+                            pieces.append(chunk)
+                            carry = _take_tail_overlap(chunk, overlap)
+                        start += remain
+                else:
+                    buf.append(unit)
+                    buf_len = len(unit)
+        # Prefer to flush at paragraph boundaries when the buffer is fairly full
+        if buf_len > 0 and (len(carry) + buf_len >= max_chars * 0.85):
+            flush()
+        else:
+            if buf:
+                buf.append("")
+                buf_len += 1
+
+    flush()
+
+    if not pieces and s.strip():
+        pieces = [s.strip()[:max_chars]]
+    return pieces
 
 # ---------- upsert document + chunks ----------
 async def upsert_document(

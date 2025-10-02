@@ -23,21 +23,41 @@ MODEL_DIMENSIONS = {
 }
 
 
+def _sanitize_model_name(name: str) -> str:
+    """Normalize a model string from env.
+
+    Handles cases like "EMBEDDING_MODEL=text-embedding-3-large" or quoted values.
+    """
+    if not name:
+        return ""
+    value = name.strip()
+    # Strip surrounding quotes
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        value = value[1:-1].strip()
+    # If it looks like KEY=value, take the right-hand side
+    if "=" in value:
+        left, right = value.split("=", 1)
+        if left.strip().upper() in {"MODEL", "EMBEDDING_MODEL", "OPENAI_EMBEDDING_MODEL"}:
+            value = right.strip().strip('"').strip("'")
+    return value
+
+
 def _candidate_models() -> List[str]:
     preferred = [
-        settings.EMBEDDING_MODEL,
+        _sanitize_model_name(settings.EMBEDDING_MODEL),
         "text-embedding-3-large",
         "text-embedding-3-small",
         "text-embedding-ada-002",
     ]
     models: List[str] = []
-    for name in preferred:
+    for raw in preferred:
+        name = _sanitize_model_name(raw)
         if not name or name in models:
             continue
         dim = MODEL_DIMENSIONS.get(name)
         if dim is not None and dim != TARGET_DIM:
-            logger.warning(
-                "Skipping embedding model %s because dimension %s does not match target %s",
+            logger.info(
+                "Skipping candidate '%s' (dim %s) because TARGET_DIM=%s",
                 name,
                 dim,
                 TARGET_DIM,
@@ -46,7 +66,7 @@ def _candidate_models() -> List[str]:
         models.append(name)
     if not models:
         default = "text-embedding-3-small" if TARGET_DIM == 1536 else "text-embedding-3-large"
-        logger.warning("No embedding models matched target dim %s; defaulting to %s", TARGET_DIM, default)
+        logger.warning("No embedding models matched TARGET_DIM=%s; defaulting to %s", TARGET_DIM, default)
         models.append(default)
     return models
 
@@ -60,9 +80,9 @@ def _switch_to_next_model() -> bool:
     global _CURRENT_MODEL, _FALLBACK_MODELS
     while _FALLBACK_MODELS:
         candidate = _FALLBACK_MODELS.pop(0)
-        if candidate:
+        if candidate and candidate != _CURRENT_MODEL:
             logger.warning(
-                "Embedding model %s unavailable or incompatible; falling back to %s",
+                "Embedding model '%s' failed; falling back to '%s'",
                 _CURRENT_MODEL,
                 candidate,
             )
