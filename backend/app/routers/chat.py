@@ -1,6 +1,7 @@
 # app/routers/chat.py
 from __future__ import annotations
 from typing import List
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -66,13 +67,20 @@ async def ask(
             doc_order.append(doc_id)
         groups[doc_id].append(row)
 
-    # Build sequential context blocks by sorting each group by ord asc
+    # Build sequential context blocks by sorting each group by page asc (if available), then ord asc
     # and merging consecutive ords into a single block for continuity.
     context_blocks: List[tuple[str, str]] = []
     response_sources: List[str] = []
 
     for doc_id in doc_order:
-        rows = sorted(groups[doc_id], key=lambda r: int(r[4] or 0))
+        def _page_of(ref: str) -> int:
+            m = re.search(r"(?:^|#)(page|slide|para|sec)=(\d+)", ref or "")
+            return int(m.group(2)) if m else -1
+
+        rows = sorted(
+            groups[doc_id],
+            key=lambda r: (_page_of(r[3] or ""), int(r[4] or 0)),
+        )
         if not rows:
             continue
         # Merge consecutive ord runs
@@ -89,12 +97,16 @@ async def ask(
             source_ref_first = first[3] or ""
             ord_first = int(first[4] or 0)
             ord_last = int(last[4] or 0)
+            page_first = _page_of(source_ref_first)
+            page_last = _page_of(last[3] or "")
 
             if run_start == run_end:
                 label_parts: List[str] = []
                 if filename:
                     label_parts.append(filename)
-                if source_ref_first:
+                if page_first >= 0:
+                    label_parts.append(f"p. {page_first}")
+                elif source_ref_first:
                     label_parts.append(source_ref_first)
                 label_parts.append(f"chunk #{ord_first + 1}")
                 label = " | ".join(label_parts)
@@ -103,12 +115,19 @@ async def ask(
                 label_base: List[str] = []
                 if filename:
                     label_base.append(filename)
-                # Use first and last refs if available to hint range
-                source_ref_last = last[3] or ""
-                if source_ref_first and source_ref_last and source_ref_first != source_ref_last:
-                    label_base.append(f"{source_ref_first} -> {source_ref_last}")
-                elif source_ref_first:
-                    label_base.append(source_ref_first)
+                # Prefer page range if available
+                if page_first >= 0 and page_last >= 0:
+                    if page_first == page_last:
+                        label_base.append(f"p. {page_first}")
+                    else:
+                        label_base.append(f"p. {page_first}-{page_last}")
+                else:
+                    # Use first and last refs if available to hint range
+                    source_ref_last = last[3] or ""
+                    if source_ref_first and source_ref_last and source_ref_first != source_ref_last:
+                        label_base.append(f"{source_ref_first} -> {source_ref_last}")
+                    elif source_ref_first:
+                        label_base.append(source_ref_first)
                 label_base.append(f"chunks #{ord_first + 1}-{ord_last + 1}")
                 label = " | ".join(label_base)
                 text = "\n\n".join(r[2] for r in rows[run_start : run_end + 1])

@@ -1,7 +1,7 @@
 # app/routers/documents.py
 from __future__ import annotations
-from typing import List, Tuple
-import os, shutil, tempfile
+from typing import List, Tuple, Dict
+import os, shutil, tempfile, re
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from sqlalchemy.orm import Session
 
@@ -10,6 +10,10 @@ from app.db import get_db
 from app.parsing import parse_file
 from app.rag import upsert_document
 from app.security import ensure_agent_access, require_role, Role
+from app.models import Document, Chunk
+from fastapi.responses import Response
+import io
+import fitz  # PyMuPDF
 
 router = APIRouter()
 
@@ -89,3 +93,169 @@ async def upload(
         total_chunks += n_chunks
 
     return {"ok": True, "documents": results, "total_chunks": total_chunks}
+
+
+_PAGE_RE = re.compile(r"(?:^|#)(page|slide|para|sec)=(\d+)")
+
+
+def _extract_page(source_ref: str) -> int | None:
+    if not source_ref:
+        return None
+    m = _PAGE_RE.search(source_ref)
+    if not m:
+        return None
+    try:
+        return int(m.group(2))
+    except Exception:
+        return None
+
+
+@router.get("/{document_id}/map")
+def document_map(document_id: int, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    rows = (
+        db.query(Chunk)
+        .filter(Chunk.document_id == document_id)
+        .order_by(Chunk.ord.asc())
+        .all()
+    )
+    pages: Dict[int, List[Dict[str, object]]] = {}
+    no_page: List[Dict[str, object]] = []
+    for r in rows:
+        p = _extract_page(getattr(r, "source_ref", "") or "")
+        entry = {
+            "chunk_id": r.id,
+            "ord": r.ord or 0,
+            "source_ref": getattr(r, "source_ref", "") or "",
+            "length": len(getattr(r, "text", "") or ""),
+        }
+        if p is not None:
+            pages.setdefault(p, []).append(entry)
+        else:
+            no_page.append(entry)
+    page_list = [
+        {"page": page_no, "chunks": sorted(items, key=lambda x: int(x["ord"]))}
+        for page_no, items in sorted(pages.items(), key=lambda kv: kv[0])
+    ]
+    if no_page:
+        page_list.append({"page": None, "chunks": sorted(no_page, key=lambda x: int(x["ord"]))})
+    return {
+        "ok": True,
+        "document": {"id": doc.id, "filename": doc.filename, "agent_slug": doc.agent_slug},
+        "pages": page_list,
+        "totals": {"chunks": len(rows), "pages": len(page_list)},
+    }
+
+
+@router.get("/{document_id}/consolidated")
+def document_consolidated(document_id: int, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    rows = (
+        db.query(Chunk)
+        .filter(Chunk.document_id == document_id)
+        .order_by(Chunk.ord.asc())
+        .all()
+    )
+    # Group by page
+    pages: Dict[int, List[str]] = {}
+    no_page: List[str] = []
+    for r in rows:
+        p = _extract_page(getattr(r, "source_ref", "") or "")
+        if p is not None:
+            pages.setdefault(p, []).append(getattr(r, "text", "") or "")
+        else:
+            no_page.append(getattr(r, "text", "") or "")
+    lines: List[str] = []
+    for page_no, texts in sorted(pages.items(), key=lambda kv: kv[0]):
+        lines.append(f"=== Page {page_no} ===")
+        lines.append("\n\n".join(texts))
+        lines.append("")
+    if no_page:
+        lines.append("=== Unpaged ===")
+        lines.append("\n\n".join(no_page))
+        lines.append("")
+    return {
+        "ok": True,
+        "document": {"id": doc.id, "filename": doc.filename, "agent_slug": doc.agent_slug},
+        "text": "\n".join(lines).strip(),
+    }
+
+
+def _build_consolidated_text(db: Session, document_id: int) -> Tuple[Document, str]:
+    doc = db.query(Document).filter(Document.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    rows = (
+        db.query(Chunk)
+        .filter(Chunk.document_id == document_id)
+        .order_by(Chunk.ord.asc())
+        .all()
+    )
+    pages: Dict[int, List[str]] = {}
+    no_page: List[str] = []
+    for r in rows:
+        p = _extract_page(getattr(r, "source_ref", "") or "")
+        if p is not None:
+            pages.setdefault(p, []).append(getattr(r, "text", "") or "")
+        else:
+            no_page.append(getattr(r, "text", "") or "")
+    lines: List[str] = []
+    for page_no, texts in sorted(pages.items(), key=lambda kv: kv[0]):
+        lines.append(f"=== Page {page_no} ===")
+        lines.append("\n\n".join(texts))
+        lines.append("")
+    if no_page:
+        lines.append("=== Unpaged ===")
+        lines.append("\n\n".join(no_page))
+        lines.append("")
+    return doc, "\n".join(lines).strip()
+
+
+@router.get("/{document_id}/export.{fmt}")
+def document_export(document_id: int, fmt: str, db: Session = Depends(get_db)):
+    doc, text = _build_consolidated_text(db, document_id)
+
+    filename_base = (doc.filename or f"document-{doc.id}").rsplit("/", 1)[-1]
+    if fmt.lower() in {"txt", "text"}:
+        data = text.encode("utf-8")
+        headers = {"Content-Disposition": f"attachment; filename=\"{filename_base}.txt\""}
+        return Response(content=data, media_type="text/plain; charset=utf-8", headers=headers)
+
+    if fmt.lower() in {"md", "markdown"}:
+        md_lines = [f"# {filename_base}", "", text]
+        data = "\n".join(md_lines).encode("utf-8")
+        headers = {"Content-Disposition": f"attachment; filename=\"{filename_base}.md\""}
+        return Response(content=data, media_type="text/markdown; charset=utf-8", headers=headers)
+
+    if fmt.lower() == "pdf":
+        # Render a simple PDF using PyMuPDF
+        # Page: A4 portrait (595 x 842 pt)
+        page_w, page_h = 595, 842
+        margin = 36
+        line_h = 14
+        max_lines = max(1, int((page_h - 2 * margin) / line_h))
+        lines = text.split("\n")
+
+        doc_pdf = fitz.open()
+        cursor = 0
+        while cursor < len(lines):
+            page = doc_pdf.new_page(width=page_w, height=page_h)
+            start = cursor
+            end = min(len(lines), start + max_lines)
+            chunk = "\n".join(lines[start:end])
+            rect = fitz.Rect(margin, margin, page_w - margin, page_h - margin)
+            page.insert_textbox(rect, chunk, fontsize=10, fontname="helv", align=0)
+            cursor = end
+
+        buf = io.BytesIO()
+        doc_pdf.save(buf)
+        doc_pdf.close()
+        data = buf.getvalue()
+        headers = {"Content-Disposition": f"attachment; filename=\"{filename_base}.pdf\""}
+        return Response(content=data, media_type="application/pdf", headers=headers)
+
+    raise HTTPException(status_code=400, detail="Unsupported format. Use txt, md or pdf.")

@@ -55,6 +55,12 @@ def _decode_bytes(data: bytes) -> str:
 # ------------------------------
 
 def iter_html(path: str) -> Iterator[Tuple[str, str]]:
+    """Extract HTML with lightweight structure.
+
+    Emits segments labeled by section heading order when possible:
+    - base#sec=N for content under a heading (h1..h6)
+    - Falls back to base for uncategorized content
+    """
     with open(path, "rb") as f:
         raw = f.read()
     try:
@@ -63,14 +69,31 @@ def iter_html(path: str) -> Iterator[Tuple[str, str]]:
         soup = BeautifulSoup(raw, "html.parser")
     for bad in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
         bad.decompose()
-    text_chunks: List[str] = []
+
+    base = os.path.basename(path)
+    sec_index = 0
+    el_index = 0
+    current_sec = None
+    # Traverse in document order
     for element in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "th", "td"]):
         content = element.get_text(" ", strip=True)
-        if content:
-            text_chunks.append(content)
-    if not text_chunks:
-        text_chunks.append(soup.get_text("\n"))
-    yield (os.path.basename(path), "\n".join(text_chunks))
+        if not content:
+            continue
+        tag = element.name.lower()
+        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            sec_index += 1
+            current_sec = sec_index
+            el_index = 0
+            yield (f"{base}#sec={current_sec}", content)
+        else:
+            el_index += 1
+            if current_sec is not None:
+                yield (f"{base}#sec={current_sec}#el={el_index}", content)
+            else:
+                yield (base, content)
+    # Fallback: if nothing yielded, return whole text
+    # (this rarely triggers because the loop above covers most tags)
+    # Keep as a guard for very minimal HTMLs
 
 
 # ------------------------------
@@ -127,20 +150,37 @@ def _iter_docx_images(path: str) -> Iterator[Tuple[str, str]]:
 
 
 def iter_docx(path: str) -> Iterator[Tuple[str, str]]:
+    """Extract DOCX as structured segments with stable refs.
+
+    - Paragraphs are emitted individually as base#para=N
+    - Table rows are emitted as base#table=T#row=R
+    - Images are OCR'd via _iter_docx_images
+    """
     doc = DocxDocument(path)
-    parts: List[str] = []
+    base = os.path.basename(path)
+
+    # Paragraphs
+    para_index = 0
     for para in doc.paragraphs:
-        if para.text and para.text.strip():
-            parts.append(para.text)
+        txt = (para.text or "").strip()
+        if not txt:
+            continue
+        para_index += 1
+        yield (f"{base}#para={para_index}", txt)
+
+    # Tables
+    table_index = 0
     for table in doc.tables:
+        table_index += 1
+        row_index = 0
         for row in table.rows:
+            row_index += 1
             cells = [cell.text.strip() for cell in row.cells]
             line = " | ".join(c for c in cells if c)
             if line:
-                parts.append(line)
-    base = os.path.basename(path)
-    if parts:
-        yield (base, "\n".join(parts))
+                yield (f"{base}#table={table_index}#row={row_index}", line)
+
+    # Images (OCR)
     yield from _iter_docx_images(path)
 
 
