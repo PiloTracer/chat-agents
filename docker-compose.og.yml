@@ -37,8 +37,6 @@ services:
       CHAT_MAX_TOKENS: ${CHAT_MAX_TOKENS:-2048}
       CHAT_MAX_RETRIES: ${CHAT_MAX_RETRIES:-6}
       CHAT_BACKOFF_BASE: ${CHAT_BACKOFF_BASE:-0.6}
-      # Default LLM provider fallback when requests don't specify one
-      DEFAULT_CHAT_PROVIDER: ${DEFAULT_CHAT_PROVIDER:-openai}
       API_KEY: ${API_KEY:-replace_me}
       AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-change-me}
       AUTH_TOKEN_TTL_SECONDS: ${AUTH_TOKEN_TTL_SECONDS:-86400}
@@ -63,7 +61,6 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.dev
     environment:
-      NEXT_PUBLIC_DEFAULT_LLM: ${NEXT_PUBLIC_DEFAULT_LLM:-gpt}
       NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://localhost:18000}
     depends_on:
       - backend
@@ -73,3 +70,5 @@ services:
 
 volumes:
   dbdata:
+
+

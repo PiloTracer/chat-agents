@@ -6,13 +6,14 @@ import re
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-import httpx
+import httpx  # kept for compatibility; not strictly required after refactor
 
 from app.auth import Principal
 from app.config import settings
 from app.db import get_db
 from app.rag import search_chunks
 from app.agents import route_question, build_system_prompt
+from app.llm_provider import llm_provider
 from app.models import Chunk, Document
 from app.security import (
     ensure_agent_access,
@@ -25,6 +26,7 @@ router = APIRouter()
 
 
 class AskPayload(BaseModel):
+    provider: str | None = Field(default=None, description="'gpt'|'openai' or 'deepseek'")
     question: str
     agent: str | None = None
     top_k: int = Field(default=settings.TOP_K, ge=1, le=settings.MAX_CANDIDATE_CHUNKS)
@@ -359,63 +361,36 @@ async def ask(
 
     system_prompt = build_system_prompt(agent_slug, context_blocks, agent_map)
 
-    headers = {"Content-Type": "application/json"}
-    if settings.API_KEY:
-        headers["Authorization"] = f"Bearer {settings.API_KEY}"
+    # ---------- LLM call via unified provider client ----------
+    # Ensure a defined value even if client/fallback doesn't populate it
+    used_provider = payload.provider or "openai"
 
-    completion_payload = {
-        "model": settings.CHAT_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": question},
-        ],
-        "temperature": settings.CHAT_TEMPERATURE,
-        "top_p": settings.CHAT_TOP_P,
-        "max_tokens": settings.CHAT_MAX_TOKENS,
-    }
+    # Build messages for OpenAI/DeepSeek compatible chat
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": question},
+    ]
 
-    # Robust retries for provider 429/5xx
-    retries = getattr(settings, "CHAT_MAX_RETRIES", 5)
-    backoff = getattr(settings, "CHAT_BACKOFF_BASE", 0.6)
-    delay = backoff if backoff > 0 else 0.6
-    answer = None
-    async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
-        for attempt in range(max(1, retries)):
-            try:
-                response = await client.post(
-                    f"{settings.CHAT_PROVIDER_BASE_URL}/chat/completions",
-                    headers=headers,
-                    json=completion_payload,
-                )
-                response.raise_for_status()
-                answer = response.json()["choices"][0]["message"]["content"]
-                break
-            except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code
-                # Retry on rate limits and transient server errors
-                if status in (429, 500, 502, 503, 504) and attempt < max(1, retries) - 1:
-                    await asyncio.sleep(delay)
-                    delay = min(delay * 2, 10.0)
-                    continue
-                # Surface provider error concisely
-                try:
-                    data = exc.response.json()
-                    detail = data.get("error", {}).get("message") or data.get("message") or str(data)
-                except Exception:
-                    detail = exc.response.text
-                raise HTTPException(status_code=status, detail=f"Upstream chat error: {detail}") from exc
-            except (httpx.RequestError, httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
-                if attempt < max(1, retries) - 1:
-                    await asyncio.sleep(delay)
-                    delay = min(delay * 2, 10.0)
-                    continue
-                raise HTTPException(status_code=502, detail=f"Chat request failed: {exc}") from exc
+    try:
+        result = await llm_provider.chat_completion(
+            messages=messages,
+            provider=payload.provider,                 # "gpt"/"openai" or "deepseek"
+            temperature=settings.CHAT_TEMPERATURE,
+            max_tokens=settings.CHAT_MAX_TOKENS,
+            retries=getattr(settings, "CHAT_MAX_RETRIES", 2),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM request failed: {exc}") from exc
 
-    if answer is None:
+    answer = (result.get("content") or "").strip()
+    used_provider = result.get("provider", used_provider)
+
+    if not answer:
         raise HTTPException(status_code=502, detail="No answer from chat provider")
 
     return {
         "ok": True,
+        "provider": used_provider,
         "agent": agent_slug,
         "answer": answer,
         "sources": response_sources,

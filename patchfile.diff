@@ -1,0 +1,85 @@
+*** a/backend/app/routers/chat.py
+--- b/backend/app/routers/chat.py
+***************
+*** 1,20 ****
+  # app/routers/chat.py
+  from __future__ import annotations
+  import asyncio
+  from typing import List
+  import re
+  from fastapi import APIRouter, Depends, HTTPException
+  from pydantic import BaseModel, Field
+  from sqlalchemy.orm import Session
+  import httpx
+
+  from app.auth import Principal
+  from app.config import settings
+  from app.db import get_db
+  from app.rag import search_chunks
+- from app.agents import route_question, build_system_prompt
++ from app.agents import route_question, build_system_prompt
++ from app.llm_provider import llm_provider
+  from app.models import Chunk, Document
+***************
+*** 85,102 ****
+  class AskPayload(BaseModel):
+      question: str
+      agent: str | None = None
+      top_k: int = Field(default=settings.TOP_K, ge=1, le=settings.MAX_CANDIDATE_CHUNKS)
+      extended: bool = Field(default=False, description="Enable extended context by including adjacent pages")
+      page_window: int = Field(default=1, ge=0, le=5)
++     # NEW: allow caller to select the LLM; accepted aliases: "gpt"|"openai" or "deepseek"
++     provider: str | None = Field(default=None, description="'gpt'|'openai' or 'deepseek'")
+
+***************
+*** 370,432 ****
+      # ... previous code that prepares `messages`, `retries`, etc.
+
+-     answer = None
+-     async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
+-         for attempt in range(max(1, retries)):
+-             try:
+-                 response = await client.post(
+-                     f"{settings.CHAT_PROVIDER_BASE_URL}/chat/completions",
+-                     headers=headers,
+-                     json=completion_payload,
+-                 )
+-                 response.raise_for_status()
+-                 answer = response.json()["choices"][0]["message"]["content"]
+-                 break
+-             except httpx.HTTPStatusError as exc:
+-                 # ... existing error handling ...
+-                 pass
+-             except httpx.RequestError as exc:
+-                 # ... existing error handling ...
+-                 pass
+-     if answer is None:
+-         raise HTTPException(status_code=502, detail="LLM request failed after retries")
++     # --- FIX START ---
++     # Always define used_provider before any return paths, so it never triggers NameError.
++     used_provider = (payload.provider or "openai")
++     # Call provider-agnostic client; it returns {'content': ..., 'provider': ...}
++     result = await llm_provider.chat_completion(
++         messages=messages,
++         provider=payload.provider,
++         temperature=settings.CHAT_TEMPERATURE,
++         max_tokens=settings.CHAT_MAX_TOKENS,
++         retries=retries,
++     )
++     answer = result["content"]
++     # Update with the actual provider that answered (after fallback logic if any)
++     used_provider = result.get("provider", used_provider)
++     # --- FIX END ---
+
+      answer_text = answer.strip()
+
+      # ... code building sources/citations/agent, etc.
+
+-     return {
++     return {
+          "ok": True,
++         "provider": used_provider,
+          "answer": answer_text,
+          "sources": source_labels,
+          "agent": resolved_agent,
+      }

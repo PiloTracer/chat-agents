@@ -18,6 +18,9 @@ class Settings:
     CHAT_MAX_TOKENS = int(os.getenv("CHAT_MAX_TOKENS", "2048"))
     CHAT_MAX_RETRIES = int(os.getenv("CHAT_MAX_RETRIES", "5"))
     CHAT_BACKOFF_BASE = float(os.getenv("CHAT_BACKOFF_BASE", "0.6"))
+    # Which chat provider to use by default when a request does not specify one.
+    # Accepts values like 'openai' or 'gpt' for OpenAI, and 'deepseek' for DeepSeek.
+    DEFAULT_CHAT_PROVIDER = os.getenv("DEFAULT_CHAT_PROVIDER", os.getenv("CHAT_PROVIDER", "openai"))
 
     MAX_CHUNK_CHARS = int(os.getenv("MAX_CHUNK_CHARS", os.getenv("MAX_CHUNK_TOKENS", "1100")))
     CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "240"))
@@ -60,3 +63,14 @@ if settings.CHUNK_OVERLAP >= settings.MAX_CHUNK_CHARS:
 
 if settings.TOP_K > settings.MAX_CANDIDATE_CHUNKS:
     settings.MAX_CANDIDATE_CHUNKS = settings.TOP_K
+
+# --- Multi-provider additions (appended by tool) ---
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "missing fallback api key")
+
+DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com/v1")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_CHAT_MODEL = os.getenv("DEEPSEEK_CHAT_MODEL", "deepseek-chat")
+DEEPSEEK_EMBEDDING_MODEL = os.getenv("DEEPSEEK_EMBEDDING_MODEL", "deepseek-embedder")
+
+ENABLE_PROVIDER_FALLBACK = os.getenv("ENABLE_PROVIDER_FALLBACK", "true").lower() in {"1","true","yes"}

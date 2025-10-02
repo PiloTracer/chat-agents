@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import BaseModel, Field
 from typing import List, Optional
 
@@ -16,6 +17,7 @@ class DocumentOut(BaseModel):
     content_type: str
 
 class AskRequest(BaseModel):
+    provider: Optional[str] = None  # 'gpt'|'openai' or 'deepseek'
     question: str
     agent_slug: Optional[str] = None  # if None, router decides
     top_k: int = 24

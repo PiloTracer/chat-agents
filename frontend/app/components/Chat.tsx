@@ -14,10 +14,12 @@ type ChatProps = {
 
 export default function Chat({ apiBase, token }: ChatProps) {
   const [question, setQuestion] = useState<string>("");
+  const [llm, setLlm] = useState<string>(process.env.NEXT_PUBLIC_DEFAULT_LLM || "gpt");
   const [selectedAgent, setSelectedAgent] = useState<string>("");
   const [topK, setTopK] = useState<number>(16);
   const [answer, setAnswer] = useState<string | null>(null);
   const [sources, setSources] = useState<string[]>([]);
+  const [dataProvider, setDataProvider] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,6 +69,7 @@ export default function Chat({ apiBase, token }: ChatProps) {
       const response = await axios.post(
         `${apiBase}/chat/ask`,
         {
+          provider: llm,
           question,
           agent: selectedAgent || null,
           top_k: topK,
@@ -78,6 +81,7 @@ export default function Chat({ apiBase, token }: ChatProps) {
         },
       );
       const data = response.data ?? {};
+      setDataProvider(typeof data.provider === 'string' ? data.provider : '');
       setAnswer(data.answer ?? "");
       setSources(Array.isArray(data.sources) ? data.sources : []);
       if (!selectedAgent && typeof data.agent === "string") {
@@ -93,6 +97,13 @@ export default function Chat({ apiBase, token }: ChatProps) {
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <div style={{ display: "grid", gap: 8 }}>
+        <label style={{ display: "flex", gap: 8 }}>
+          <span style={{ alignSelf: "flex-start", paddingTop: 4 }}>LLM:</span>
+          <select value={llm} onChange={(e)=>setLlm(e.target.value)} style={{ minWidth: 140 }}>
+            <option value="gpt">GPT</option>
+            <option value="deepseek">DeepSeek</option>
+          </select>
+        </label>
         <label style={{ display: "flex", gap: 8 }}>
           <span style={{ alignSelf: "flex-start", paddingTop: 4 }}>Question:</span>
           <textarea
