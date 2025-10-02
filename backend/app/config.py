@@ -17,10 +17,10 @@ class Settings:
     CHAT_TOP_P = float(os.getenv("CHAT_TOP_P", "1.0"))
     CHAT_MAX_TOKENS = int(os.getenv("CHAT_MAX_TOKENS", "2048"))
 
-    MAX_CHUNK_CHARS = int(os.getenv("MAX_CHUNK_CHARS", os.getenv("MAX_CHUNK_TOKENS", "900")))
-    CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
+    MAX_CHUNK_CHARS = int(os.getenv("MAX_CHUNK_CHARS", os.getenv("MAX_CHUNK_TOKENS", "1100")))
+    CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "240"))
     TOP_K = int(os.getenv("TOP_K", "16"))
-    MAX_CANDIDATE_CHUNKS = int(os.getenv("MAX_CANDIDATE_CHUNKS", "24"))
+    MAX_CANDIDATE_CHUNKS = int(os.getenv("MAX_CANDIDATE_CHUNKS", "96"))
     RERANK = os.getenv("RERANK", "false").lower() == "true"
     ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*")
 

@@ -25,20 +25,27 @@ services:
       DEBUGPY: "1"
       DATABASE_URL: postgresql+psycopg://raguser:ragpass@db:5432/ragdb
       EMBEDDING_PROVIDER_BASE_URL: ${EMBEDDING_PROVIDER_BASE_URL:-https://api.openai.com/v1}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
-      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-large}
+      EMBEDDING_TARGET_DIM: ${EMBEDDING_TARGET_DIM:-3072}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-64}
       EMBEDDING_MAX_RETRIES: ${EMBEDDING_MAX_RETRIES:-5}
       EMBEDDING_BACKOFF_BASE: ${EMBEDDING_BACKOFF_BASE:-0.6}
       CHAT_PROVIDER_BASE_URL: ${CHAT_PROVIDER_BASE_URL:-https://api.openai.com/v1}
-      CHAT_MODEL: ${CHAT_MODEL:-gpt-4o-mini}
+      CHAT_MODEL: ${CHAT_MODEL:-gpt-4.1}
+      CHAT_TEMPERATURE: ${CHAT_TEMPERATURE:-0.2}
+      CHAT_TOP_P: ${CHAT_TOP_P:-1.0}
+      CHAT_MAX_TOKENS: ${CHAT_MAX_TOKENS:-2048}
       API_KEY: ${API_KEY:-replace_me}
-      MAX_CHUNK_TOKENS: ${MAX_CHUNK_TOKENS:-512}
-      MAX_CANDIDATE_CHUNKS: ${MAX_CANDIDATE_CHUNKS:-24}
-      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-250}
-      MAX_CHUNK_CHARS: ${MAX_CHUNK_CHARS:-1200}
-      TOP_K: ${TOP_K:-12}
+      AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-change-me}
+      AUTH_TOKEN_TTL_SECONDS: ${AUTH_TOKEN_TTL_SECONDS:-86400}
+      MAX_CANDIDATE_CHUNKS: ${MAX_CANDIDATE_CHUNKS:-96}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-240}
+      MAX_CHUNK_CHARS: ${MAX_CHUNK_CHARS:-1100}
+      TOP_K: ${TOP_K:-16}
       RERANK: ${RERANK:-false}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-60}
+      TESS_LANGS: ${TESS_LANGS:-spa+eng}
       AUTH_USERS: ${AUTH_USERS:-username_changeme:password_changeme:role_changeme,username2_changeme:password2_changeme:role2_changeme}
     depends_on:
       db:
@@ -61,3 +68,5 @@ services:
 
 volumes:
   dbdata:
+
+

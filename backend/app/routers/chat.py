@@ -31,13 +31,130 @@ class AskPayload(BaseModel):
     page_window: int = Field(default=1, ge=0, le=5)
 
 
+def _page_of(ref: str) -> int:
+    m = re.search(r"(?:^|#)(page|slide|para|sec)=(\d+)", ref or "")
+    return int(m.group(2)) if m else -1
+
+
+def _normalize(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "")).strip().lower()
+
+
+def _extract_quoted_title(q: str) -> str | None:
+    # Support ASCII and common curly quotes via \u escapes to avoid non-ASCII literals
+    quotes = "\"'\u201c\u201d\u2018\u2019"
+    pattern = "[" + quotes + "]" + "([^" + quotes + "]{3,120})" + "[" + quotes + "]"
+    m = re.search(pattern, q or "")
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _is_completeness_intent(question: str) -> bool:
+    q = _normalize(question)
+    # ASCII-only terms to avoid encoding issues
+    terms = [
+        "esta completo",
+        "completo",
+        "completitud",
+        "integridad",
+        "continuidad",
+        "faltan paginas",
+        "faltan capitulos",
+        "incompleto",
+        "libro completo",
+        "obra completa",
+        "verificar continuidad",
+        "verificar si esta completo",
+    ]
+    return any(t in q for t in terms)
+
+
+def _find_candidate_documents(db: Session, question: str, doc_ids_from_hits: List[int]) -> List[Document]:
+    quoted = _extract_quoted_title(question)
+    if quoted:
+        title_norm = _normalize(quoted)
+        docs = db.query(Document).all()
+        ranked: List[tuple[int, Document]] = []
+        for d in docs:
+            fname = _normalize(d.filename or "")
+            score = 0
+            if title_norm in fname:
+                score += 10
+            if any(tok in fname for tok in title_norm.split()):
+                score += 1
+            if score > 0:
+                ranked.append((score, d))
+        ranked.sort(key=lambda t: t[0], reverse=True)
+        if ranked:
+            return [d for _, d in ranked]
+    if doc_ids_from_hits:
+        return list(db.query(Document).filter(Document.id.in_(doc_ids_from_hits)).all())
+    return []
+
+
+def _coverage_for_doc(db: Session, doc: Document) -> tuple[str, str, dict]:
+    rows = (
+        db.query(Chunk.id, Chunk.document_id, Chunk.text, Chunk.source_ref, Chunk.ord)
+        .filter(Chunk.document_id == doc.id)
+        .order_by(Chunk.ord.asc())
+        .all()
+    )
+    pages = []
+    for r in rows:
+        p = _page_of(r[3] or "")
+        if p >= 0:
+            pages.append(p)
+    unique_pages = sorted(set(pages))
+    missing_pages: List[int] = []
+    continuity_ok = True
+    page_range = None
+    if unique_pages:
+        first = unique_pages[0]
+        last = unique_pages[-1]
+        page_range = (first, last)
+        have = set(unique_pages)
+        missing_pages = [n for n in range(first, last + 1) if n not in have]
+        continuity_ok = len(missing_pages) == 0
+
+    lines: List[str] = []
+    lines.append("Coverage Report (computed):")
+    lines.append(f"- document_id: {doc.id}")
+    lines.append(f"- filename: {doc.filename}")
+    lines.append(f"- total_chunks: {len(rows)}")
+    if page_range:
+        lines.append(f"- pages_covered: {page_range[0]}..{page_range[1]}")
+        lines.append(f"- unique_pages: {len(unique_pages)}")
+        if missing_pages:
+            lines.append(f"- missing_pages: {', '.join(str(p) for p in missing_pages)}")
+        else:
+            lines.append("- missing_pages: none")
+    else:
+        lines.append("- pages_covered: unknown (no page markers); using chunk ord only")
+    lines.append(f"- continuity_ok: {'yes' if continuity_ok else 'no'}")
+
+    label = f"Coverage: {doc.filename or 'document'}"
+    text = "\n".join(lines)
+    meta = {
+        "type": "coverage",
+        "document_id": int(doc.id),
+        "filename": doc.filename or "",
+        "total_chunks": int(len(rows)),
+        "unique_pages": unique_pages,
+        "page_range": page_range,
+        "missing_pages": missing_pages,
+        "continuity_ok": continuity_ok,
+    }
+    return label, text, meta
+
+
 @router.post("/ask")
 async def ask(
     payload: AskPayload,
     principal: Principal = Depends(require_role(Role.ADMIN)),
     db: Session = Depends(get_db),
 ):
-    question = payload.question.strip()
+    question = (payload.question or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="Empty question")
 
@@ -56,13 +173,18 @@ async def ask(
     if agent_slug not in agent_map:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    # Intent and citation detection
+    is_completeness = _is_completeness_intent(question)
+    quoted_title = _extract_quoted_title(question)
+    # Auto-extend when completeness intent OR when a book is cited OR generic 'libro' mention
+    extended = payload.extended or is_completeness or (quoted_title is not None) or ("libro" in question.lower())
+
     top_k = max(1, min(payload.top_k, settings.MAX_CANDIDATE_CHUNKS))
     # Each hit: (chunk_id, document_id, text, source_ref, ord, filename)
     hits = await search_chunks(db, agent_slug, question, top_k)
 
     # Optionally expand context with adjacent pages for each hit
-    if payload.extended and hits:
-        # Build doc -> all chunks map (id, doc, text, ref, ord, filename)
+    if extended and hits:
         doc_ids = list({h[1] for h in hits})
         rows = (
             db.query(Chunk.id, Chunk.document_id, Chunk.text, Chunk.source_ref, Chunk.ord, Document.filename)
@@ -71,16 +193,14 @@ async def ask(
             .order_by(Chunk.ord.asc())
             .all()
         )
-        def _page_of(ref: str) -> int:
-            m = re.search(r"(?:^|#)(page|slide|para|sec)=(\d+)", ref or "")
-            return int(m.group(2)) if m else -1
-        # Index by doc and page
         by_doc_page: dict[int, dict[int, list[tuple[int,int,str,str,int,str]]]] = {}
         for r in rows:
             doc_id = int(r[1])
             page_no = _page_of(r[3] or "")
             d = by_doc_page.setdefault(doc_id, {})
-            d.setdefault(page_no, []).append((int(r[0]), int(r[1]), str(r[2]), str(r[3]) if r[3] else "", int(r[4] or 0), str(r[5]) if r[5] else ""))
+            d.setdefault(page_no, []).append(
+                (int(r[0]), int(r[1]), str(r[2]), str(r[3]) if r[3] else "", int(r[4] or 0), str(r[5]) if r[5] else "")
+            )
 
         selected: dict[int, tuple[int,int,str,str,int,str]] = {h[0]: h for h in hits}
         for h in hits:
@@ -91,8 +211,37 @@ async def ask(
             for p in range(page_no - payload.page_window, page_no + payload.page_window + 1):
                 for row in by_doc_page.get(doc_id, {}).get(p, []):
                     selected[row[0]] = row
-        # Replace hits with expanded selection (preserve doc grouping)
         hits = list(selected.values())
+
+    # If there is a quoted title, prepend its coverage and boost its content
+    coverage_blocks: List[tuple[str, str]] = []
+    sources_meta: List[dict] = []
+    candidate_docs = _find_candidate_documents(db, question, [h[1] for h in hits])
+    priority_doc_ids = {d.id for d in candidate_docs}
+    for d in candidate_docs:
+        cov_label, cov_text, cov_meta = _coverage_for_doc(db, d)
+        # Canonical fact when coverage is complete
+        if cov_meta.get("continuity_ok") and not cov_meta.get("missing_pages"):
+            fact_label = f"Hecho verificado: {d.filename}"
+            fact_text = (
+                f"El documento '{d.filename}' está completo (missing_pages=none). "
+                "No afirmes que falta contenido salvo que haya evidencia contraria."
+            )
+            coverage_blocks.append((fact_label, fact_text))
+            sources_meta.append({"type": "fact", "document_id": int(d.id), "filename": d.filename or ""})
+        coverage_blocks.append((cov_label, cov_text))
+        sources_meta.append(cov_meta)
+        if extended and d.id not in {h[1] for h in hits}:
+            extra_rows = (
+                db.query(Chunk.id, Chunk.document_id, Chunk.text, Chunk.source_ref, Chunk.ord, Document.filename)
+                .join(Document, Document.id == Chunk.document_id)
+                .filter(Chunk.document_id == d.id)
+                .order_by(Chunk.ord.asc())
+                .limit(max(12, top_k))
+                .all()
+            )
+            for r in extra_rows:
+                hits.append((int(r[0]), int(r[1]), str(r[2]), str(r[3]) if r[3] else "", int(r[4] or 0), str(r[5]) if r[5] else ""))
 
     # Group hits by document to maintain logical sequence within each file.
     groups: dict[int, list[tuple[int, int, str, str, int, str]]] = {}
@@ -104,31 +253,30 @@ async def ask(
             doc_order.append(doc_id)
         groups[doc_id].append(row)
 
-    # Build sequential context blocks by sorting each group by page asc (if available), then ord asc
-    # and merging consecutive ords into a single block for continuity.
+    # Prioritize cited documents first in doc_order
+    if priority_doc_ids:
+        doc_order = sorted(doc_order, key=lambda did: 0 if did in priority_doc_ids else 1)
+
+    # Build sequential context blocks by sorting each group by page asc then ord, and merge consecutive ords
     context_blocks: List[tuple[str, str]] = []
     response_sources: List[str] = []
-    sources_meta: List[dict] = []
+    if coverage_blocks:
+        context_blocks.extend(coverage_blocks)
+        response_sources.extend([label for (label, _) in coverage_blocks])
 
     for doc_id in doc_order:
-        def _page_of(ref: str) -> int:
-            m = re.search(r"(?:^|#)(page|slide|para|sec)=(\d+)", ref or "")
-            return int(m.group(2)) if m else -1
-
         rows = sorted(
             groups[doc_id],
             key=lambda r: (_page_of(r[3] or ""), int(r[4] or 0)),
         )
         if not rows:
             continue
-        # Merge consecutive ord runs
         run_start = 0
         while run_start < len(rows):
             run_end = run_start
             while run_end + 1 < len(rows) and int(rows[run_end + 1][4] or 0) == int(rows[run_end][4] or 0) + 1:
                 run_end += 1
 
-            # Prepare label and combined text
             first = rows[run_start]
             last = rows[run_end]
             filename = first[5] or ""
@@ -153,14 +301,12 @@ async def ask(
                 label_base: List[str] = []
                 if filename:
                     label_base.append(filename)
-                # Prefer page range if available
                 if page_first >= 0 and page_last >= 0:
                     if page_first == page_last:
                         label_base.append(f"p. {page_first}")
                     else:
                         label_base.append(f"p. {page_first}-{page_last}")
                 else:
-                    # Use first and last refs if available to hint range
                     source_ref_last = last[3] or ""
                     if source_ref_first and source_ref_last and source_ref_first != source_ref_last:
                         label_base.append(f"{source_ref_first} -> {source_ref_last}")
@@ -172,18 +318,17 @@ async def ask(
 
             context_blocks.append((label, text))
             response_sources.append(label)
-            chunk_ids = [int(r[0]) for r in rows[run_start : run_end + 1]]
-            meta = {
+            sources_meta.append({
+                "type": "context",
                 "document_id": int(doc_id),
                 "filename": filename,
                 "page_start": int(page_first) if page_first >= 0 else None,
                 "page_end": int(page_last) if page_last >= 0 else None,
                 "ord_start": ord_first,
                 "ord_end": ord_last,
-                "chunk_ids": chunk_ids,
+                "chunk_ids": [int(r[0]) for r in rows[run_start : run_end + 1]],
                 "label": label,
-            }
-            sources_meta.append(meta)
+            })
             run_start = run_end + 1
 
     system_prompt = build_system_prompt(agent_slug, context_blocks, agent_map)
@@ -219,3 +364,4 @@ async def ask(
         "sources": response_sources,
         "sources_meta": sources_meta,
     }
+

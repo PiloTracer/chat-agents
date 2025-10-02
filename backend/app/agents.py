@@ -68,18 +68,23 @@ def build_system_prompt(
             "No supporting context was retrieved. Explain that the answer cannot be derived from the uploaded documents and request the missing information."
         )
 
-    return (
-        f"You are {role}.\n"
-        "Provide a comprehensive, deeply analytical answer grounded in the retrieved documents.\n"
-        "Guidelines:\n"
-        "1. Begin with a concise direct answer that cites the most relevant sources.\n"
-        "2. Follow with detailed analysis that compares and explains the evidence from the context. Cite sources using [#].\n"
-        "3. Quote or paraphrase key passages to justify each conclusion.\n"
-        "4. List uncertainties, assumptions, or missing information that could change the answer.\n"
-        "5. Suggest actionable next steps or follow-up questions when helpful.\n"
-        "Use only the context provided. If it is insufficient, say so explicitly and describe what is missing.\n"
-        "\n"
-        "Context:\n"
-        f"{context}\n"
-        "Every factual statement must reference its supporting source as [#]."
-    )
+    guidelines = [
+        f"You are {role}.",
+        "Provide a comprehensive, deeply analytical answer grounded in the retrieved documents.",
+        "Guidelines:",
+        "1. Begin with a concise direct answer that cites the most relevant sources.",
+        "2. Follow with detailed analysis that compares and explains the evidence from the context. Cite sources using [#].",
+        "3. Quote or paraphrase key passages to justify each conclusion.",
+        "4. List uncertainties, assumptions, or missing information that could change the answer.",
+        "5. Suggest actionable next steps or follow-up questions when helpful.",
+        # Coverage guardrails
+        "6. If the context includes Coverage Report or 'Hecho verificado' blocks about document completeness, treat them as authoritative:",
+        "   - Do NOT claim that content is missing unless Coverage lists missing_pages.",
+        "   - If continuity_ok is yes and missing_pages is none, explicitly state the document is complete and use it fully.",
+        "Use only the context provided. If it is insufficient, say so explicitly and describe what is missing.",
+        "",
+        "Context:",
+        f"{context}",
+        "Every factual statement must reference its supporting source as [#].",
+    ]
+    return "\n".join(guidelines)
