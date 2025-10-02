@@ -33,8 +33,10 @@ services:
       CHAT_MODEL: ${CHAT_MODEL:-gpt-4o-mini}
       API_KEY: ${API_KEY:-replace_me}
       MAX_CHUNK_TOKENS: ${MAX_CHUNK_TOKENS:-512}
-      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-64}
-      TOP_K: ${TOP_K:-8}
+      MAX_CANDIDATE_CHUNKS: ${MAX_CANDIDATE_CHUNKS:-24}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-250}
+      MAX_CHUNK_CHARS: ${MAX_CHUNK_CHARS:-1200}
+      TOP_K: ${TOP_K:-12}
       RERANK: ${RERANK:-false}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
       AUTH_USERS: ${AUTH_USERS:-username_changeme:password_changeme:role_changeme,username2_changeme:password2_changeme:role2_changeme}

@@ -18,7 +18,7 @@ class DocumentOut(BaseModel):
 class AskRequest(BaseModel):
     question: str
     agent_slug: Optional[str] = None  # if None, router decides
-    top_k: int = 8
+    top_k: int = 24
 
 class AskAnswer(BaseModel):
     answer: str
