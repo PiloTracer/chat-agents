@@ -13,11 +13,12 @@ type UploaderProps = {
 };
 
 export default function Uploader({ apiBase, token }: UploaderProps) {
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [agent, setAgent] = useState<string>("");
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [fileInputKey, setFileInputKey] = useState<number>(0);
 
   const {
     agents,
@@ -37,12 +38,12 @@ export default function Uploader({ apiBase, token }: UploaderProps) {
       setError("Sign in again to upload documents.");
       return;
     }
-    if (!file) {
-      setError("Pick a document to upload first.");
+    if (!files.length) {
+      setError("Pick at least one document to upload first.");
       return;
     }
     if (!agent) {
-      setError("Select an agent to receive the document.");
+      setError("Select an agent to receive the documents.");
       return;
     }
 
@@ -50,10 +51,14 @@ export default function Uploader({ apiBase, token }: UploaderProps) {
     setError(null);
     setStatus("");
 
+    const filesToUpload = files;
+
     try {
       const formData = new FormData();
       formData.append("agent_slug", agent);
-      formData.append("file", file);
+      filesToUpload.forEach((current) => {
+        formData.append("files", current);
+      });
 
       const response = await axios.post(
         `${apiBase}/documents/upload`,
@@ -66,12 +71,21 @@ export default function Uploader({ apiBase, token }: UploaderProps) {
       );
 
       const data = response.data ?? {};
+      const documents = Array.isArray(data.documents) ? data.documents : [];
+      const uploadedCount = documents.length || filesToUpload.length;
       const chunkCount =
-        typeof data.chunks === "number" ? data.chunks : undefined;
+        typeof data.total_chunks === "number" ? data.total_chunks : undefined;
+      const uploadedNames = documents
+        .map((entry: any) => entry?.filename)
+        .filter((name: unknown): name is string => typeof name === "string");
+      const fallbackNames = filesToUpload.map((file) => file.name);
+      const names = uploadedNames.length ? uploadedNames : fallbackNames;
+      const chunkSuffix = chunkCount ? ` (${chunkCount} chunks)` : "";
       setStatus(
-        `Uploaded successfully${chunkCount ? ` (${chunkCount} chunks)` : ""}.`,
+        `Uploaded ${uploadedCount} file${uploadedCount === 1 ? "" : "s"}${chunkSuffix}. Files: ${names.join(", ")}`,
       );
-      setFile(null);
+      setFiles([]);
+      setFileInputKey((value) => value + 1);
       refresh();
     } catch (error) {
       setError(extractErrorMessage(error, "Upload failed"));
@@ -98,9 +112,12 @@ export default function Uploader({ apiBase, token }: UploaderProps) {
           allowAutoRoute={false}
         />
         <input
+          key={fileInputKey}
           type="file"
-          onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-          multiple={false}
+          onChange={(event) =>
+            setFiles(event.target.files ? Array.from(event.target.files) : [])
+          }
+          multiple
           disabled={!token}
         />
         <button
@@ -110,6 +127,24 @@ export default function Uploader({ apiBase, token }: UploaderProps) {
         >
           {isUploading ? "Uploading..." : "Upload"}
         </button>
+        {files.length > 0 && (
+          <div
+            style={{
+              flexBasis: "100%",
+              fontSize: 13,
+              color: "#374151",
+            }}
+          >
+            <strong>Selected files:</strong>
+            <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+              {files.map((current) => (
+                <li key={`${current.name}-${current.lastModified}`}>
+                  {current.name}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
       <AgentDirectory
         agents={agents}

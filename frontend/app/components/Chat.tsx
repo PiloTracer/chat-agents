@@ -67,7 +67,7 @@ export default function Chat({ apiBase, token }: ChatProps) {
       const response = await axios.post(
         `${apiBase}/chat/ask`,
         {
-          question: trimmed,
+          question,
           agent: selectedAgent || null,
           top_k: topK,
         },
@@ -94,12 +94,20 @@ export default function Chat({ apiBase, token }: ChatProps) {
     <div style={{ display: "grid", gap: 16 }}>
       <div style={{ display: "grid", gap: 8 }}>
         <label style={{ display: "flex", gap: 8 }}>
-          <span style={{ alignSelf: "center" }}>Question:</span>
-          <input
+          <span style={{ alignSelf: "flex-start", paddingTop: 4 }}>Question:</span>
+          <textarea
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             placeholder="Ask a question..."
-            style={{ flex: 1 }}
+            style={{
+              flex: 1,
+              minHeight: 96,
+              resize: "vertical",
+              fontFamily: "inherit",
+              fontSize: "inherit",
+              lineHeight: 1.4,
+              padding: 8,
+            }}
             disabled={!token}
           />
         </label>

@@ -13,10 +13,9 @@ from app.security import ensure_agent_access, require_role, Role
 
 router = APIRouter()
 
-
 def _norm_content_type(filename: str, content_type: str | None) -> str:
     ct = (content_type or "").lower().strip()
-    name = filename.lower()
+    name = (filename or "").lower()
     if name.endswith(".pdf"):
         return "application/pdf"
     if name.endswith(".docx"):
@@ -33,34 +32,60 @@ def _norm_content_type(filename: str, content_type: str | None) -> str:
 @router.post("/upload")
 async def upload(
     agent_slug: str = Form(...),
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
     principal: Principal = Depends(require_role(Role.ADMIN)),
     db: Session = Depends(get_db),
 ):
     ensure_agent_access(db, principal, agent_slug)
 
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
+    if not files:
+        raise HTTPException(status_code=422, detail="No files provided")
 
-    ct = _norm_content_type(file.filename, file.content_type)
+    results: List[dict[str, object]] = []
+    total_chunks = 0
 
-    try:
-        parsed_iter = parse_file(tmp_path, ct)
-        parsed: List[Tuple[str, str]] = [
-            (src, txt) for (src, txt) in parsed_iter if txt and txt.strip()
-        ]
+    for upload_file in files:
+        tmp_path: str | None = None
+        n_chunks = 0
+        doc_id = None
         try:
-            doc_id, n_chunks = await upsert_document(db, agent_slug, file.filename, ct, parsed)
-        except RuntimeError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                shutil.copyfileobj(upload_file.file, tmp)
+                tmp_path = tmp.name
 
-    if n_chunks == 0:
-        raise HTTPException(422, f"No extractable text from {file.filename}")
+            ct = _norm_content_type(upload_file.filename or "", upload_file.content_type)
 
-    return {"ok": True, "document_id": doc_id, "chunks": n_chunks}
+            parsed_iter = parse_file(tmp_path, ct)
+            parsed: List[Tuple[str, str]] = [
+                (src, txt) for (src, txt) in parsed_iter if txt and txt.strip()
+            ]
+            try:
+                doc_id, n_chunks = await upsert_document(
+                    db,
+                    agent_slug,
+                    upload_file.filename,
+                    ct,
+                    parsed,
+                )
+            except RuntimeError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+
+        if n_chunks == 0:
+            raise HTTPException(422, f"No extractable text from {upload_file.filename}")
+
+        results.append(
+            {
+                "filename": upload_file.filename,
+                "document_id": doc_id,
+                "chunks": n_chunks,
+            }
+        )
+        total_chunks += n_chunks
+
+    return {"ok": True, "documents": results, "total_chunks": total_chunks}
