@@ -1,5 +1,6 @@
 # app/routers/chat.py
 from __future__ import annotations
+import asyncio
 from typing import List
 import re
 from fastapi import APIRouter, Depends, HTTPException
@@ -106,10 +107,26 @@ def _coverage_for_doc(db: Session, doc: Document) -> tuple[str, str, dict]:
         if p >= 0:
             pages.append(p)
     unique_pages = sorted(set(pages))
-    missing_pages: List[int] = []
+    # Incorporate blank pages metadata if available
+    meta = getattr(doc, "meta", None)
+    blanks = []
+    total = None
+    try:
+        if isinstance(meta, dict):
+            blanks = list(meta.get("blank_pages") or [])
+            total = meta.get("pages_total")
+    except Exception:
+        blanks = []
+        total = None
+    present = set(unique_pages) | set(blanks)
+    missing_pages = []
     continuity_ok = True
     page_range = None
-    if unique_pages:
+    if isinstance(total, int) and total > 0:
+        page_range = (1, total)
+        missing_pages = [n for n in range(1, total + 1) if n not in present]
+        continuity_ok = len(missing_pages) == 0
+    elif unique_pages:
         first = unique_pages[0]
         last = unique_pages[-1]
         page_range = (first, last)
@@ -135,7 +152,7 @@ def _coverage_for_doc(db: Session, doc: Document) -> tuple[str, str, dict]:
 
     label = f"Coverage: {doc.filename or 'document'}"
     text = "\n".join(lines)
-    meta = {
+    meta_out = {
         "type": "coverage",
         "document_id": int(doc.id),
         "filename": doc.filename or "",
@@ -145,7 +162,7 @@ def _coverage_for_doc(db: Session, doc: Document) -> tuple[str, str, dict]:
         "missing_pages": missing_pages,
         "continuity_ok": continuity_ok,
     }
-    return label, text, meta
+    return label, text, meta_out
 
 
 @router.post("/ask")
@@ -193,7 +210,7 @@ async def ask(
             .order_by(Chunk.ord.asc())
             .all()
         )
-        by_doc_page: dict[int, dict[int, list[tuple[int,int,str,str,int,str]]]] = {}
+        by_doc_page: dict[int, dict[int, list[tuple[int, int, str, str, int, str]]]] = {}
         for r in rows:
             doc_id = int(r[1])
             page_no = _page_of(r[3] or "")
@@ -202,7 +219,7 @@ async def ask(
                 (int(r[0]), int(r[1]), str(r[2]), str(r[3]) if r[3] else "", int(r[4] or 0), str(r[5]) if r[5] else "")
             )
 
-        selected: dict[int, tuple[int,int,str,str,int,str]] = {h[0]: h for h in hits}
+        selected: dict[int, tuple[int, int, str, str, int, str]] = {h[0]: h for h in hits}
         for h in hits:
             doc_id = h[1]
             page_no = _page_of(h[3] or "")
@@ -224,7 +241,7 @@ async def ask(
         if cov_meta.get("continuity_ok") and not cov_meta.get("missing_pages"):
             fact_label = f"Hecho verificado: {d.filename}"
             fact_text = (
-                f"El documento '{d.filename}' está completo (missing_pages=none). "
+                f"El documento '{d.filename}' esta completo (missing_pages=none). "
                 "No afirmes que falta contenido salvo que haya evidencia contraria."
             )
             coverage_blocks.append((fact_label, fact_text))
@@ -241,7 +258,16 @@ async def ask(
                 .all()
             )
             for r in extra_rows:
-                hits.append((int(r[0]), int(r[1]), str(r[2]), str(r[3]) if r[3] else "", int(r[4] or 0), str(r[5]) if r[5] else ""))
+                hits.append(
+                    (
+                        int(r[0]),
+                        int(r[1]),
+                        str(r[2]),
+                        str(r[3]) if r[3] else "",
+                        int(r[4] or 0),
+                        str(r[5]) if r[5] else "",
+                    )
+                )
 
     # Group hits by document to maintain logical sequence within each file.
     groups: dict[int, list[tuple[int, int, str, str, int, str]]] = {}
@@ -348,14 +374,45 @@ async def ask(
         "max_tokens": settings.CHAT_MAX_TOKENS,
     }
 
+    # Robust retries for provider 429/5xx
+    retries = getattr(settings, "CHAT_MAX_RETRIES", 5)
+    backoff = getattr(settings, "CHAT_BACKOFF_BASE", 0.6)
+    delay = backoff if backoff > 0 else 0.6
+    answer = None
     async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
-        response = await client.post(
-            f"{settings.CHAT_PROVIDER_BASE_URL}/chat/completions",
-            headers=headers,
-            json=completion_payload,
-        )
-        response.raise_for_status()
-        answer = response.json()["choices"][0]["message"]["content"]
+        for attempt in range(max(1, retries)):
+            try:
+                response = await client.post(
+                    f"{settings.CHAT_PROVIDER_BASE_URL}/chat/completions",
+                    headers=headers,
+                    json=completion_payload,
+                )
+                response.raise_for_status()
+                answer = response.json()["choices"][0]["message"]["content"]
+                break
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                # Retry on rate limits and transient server errors
+                if status in (429, 500, 502, 503, 504) and attempt < max(1, retries) - 1:
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 10.0)
+                    continue
+                # Surface provider error concisely
+                try:
+                    data = exc.response.json()
+                    detail = data.get("error", {}).get("message") or data.get("message") or str(data)
+                except Exception:
+                    detail = exc.response.text
+                raise HTTPException(status_code=status, detail=f"Upstream chat error: {detail}") from exc
+            except (httpx.RequestError, httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
+                if attempt < max(1, retries) - 1:
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 10.0)
+                    continue
+                raise HTTPException(status_code=502, detail=f"Chat request failed: {exc}") from exc
+
+    if answer is None:
+        raise HTTPException(status_code=502, detail="No answer from chat provider")
 
     return {
         "ok": True,
@@ -364,4 +421,3 @@ async def ask(
         "sources": response_sources,
         "sources_meta": sources_meta,
     }
-

@@ -1,10 +1,12 @@
-# app/routers/documents.py
 from __future__ import annotations
 from typing import List, Tuple, Dict
 import os, shutil, tempfile, re, io
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+import json
 
 from app.auth import Principal
 from app.db import get_db
@@ -16,6 +18,9 @@ import fitz  # PyMuPDF
 from fastapi.responses import Response
 import io
 import fitz  # PyMuPDF
+
+pages_total: int | None = None
+blank_pages: List[int] = []
 
 router = APIRouter()
 
@@ -65,6 +70,26 @@ async def upload(
             parsed: List[Tuple[str, str]] = [
                 (src, txt) for (src, txt) in parsed_iter if txt and txt.strip()
             ]
+            # Compute PDF page coverage metadata to account for blank pages
+            pages_total: int | None = None
+            blank_pages: List[int] = []
+            if (upload_file.filename or "").lower().endswith(".pdf") or "pdf" in (ct or ""):
+                try:
+                    with fitz.open(tmp_path) as pdf:
+                        pages_total = int(pdf.page_count)
+                except Exception:
+                    pages_total = None
+                present_pages = set()
+                page_re = re.compile(r"(?:^|#)page=(\d+)")
+                for src, _ in parsed:
+                    m = page_re.search(src or "")
+                    if m:
+                        try:
+                            present_pages.add(int(m.group(1)))
+                        except Exception:
+                            pass
+                if pages_total:
+                    blank_pages = [n for n in range(1, pages_total + 1) if n not in present_pages]
             try:
                 doc_id, n_chunks = await upsert_document(
                     db,
@@ -419,3 +444,5 @@ def document_export(document_id: int, fmt: str, db: Session = Depends(get_db)):
         return Response(content=data, media_type="application/pdf", headers=headers)
 
     raise HTTPException(status_code=400, detail="Unsupported format. Use txt, md or pdf.")
+
+

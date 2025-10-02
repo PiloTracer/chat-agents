@@ -11,7 +11,7 @@ from docx import Document as DocxDocument
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 import fitz  # PyMuPDF
-from PIL import Image
+from PIL import Image, ImageOps
 
 
 # ------------------------------
@@ -229,14 +229,37 @@ def iter_pptx(path: str) -> Iterator[Tuple[str, str]]:
 # PDF (text-first; OCR fallback)
 # ------------------------------
 
+def _binarize(img: Image.Image, threshold: int = 200) -> Image.Image:
+    # Convert to binary (black/white) to improve OCR on scans
+    if img.mode != "L":
+        img = img.convert("L")
+    return img.point(lambda p: 255 if p > threshold else 0, mode="1")
+
+
+def _is_blank_image(img: Image.Image) -> bool:
+    # Simple blank detection: after binarization, if almost all pixels white, consider blank
+    bw = _binarize(img)
+    # getbbox returns None if completely white (or black); check proportion too
+    bbox = bw.getbbox()
+    if bbox is None:
+        return True
+    # Sample histogram: count black pixels
+    hist = bw.histogram()
+    black = hist[0] if hist else 0
+    total = sum(hist) if hist else 1
+    return (black / max(total, 1)) < 0.001
+
+
 def _try_ocr(img: Image.Image) -> str:
     try:
         import pytesseract
     except Exception:
         return ""
     try:
-        langs = os.getenv("TESS_LANGS", "spa")
-        return pytesseract.image_to_string(img, lang=langs)
+        langs = os.getenv("TESS_LANGS", "spa+eng")
+        psm = os.getenv("TESS_PSM", "6")
+        config = f"--psm {psm}"
+        return pytesseract.image_to_string(img, lang=langs, config=config)
     except Exception:
         try:
             return pytesseract.image_to_string(img)
@@ -249,6 +272,8 @@ def _ocr_image_bytes(data: bytes) -> str:
         with Image.open(io.BytesIO(data)) as raw:
             img = raw.convert("L")
             try:
+                if _is_blank_image(img):
+                    return ""
                 return _try_ocr(img)
             finally:
                 img.close()
@@ -278,13 +303,17 @@ def iter_pdf(path: str) -> Iterator[Tuple[str, str]]:
             if text.strip():
                 yield (f"{base}#page={page_index}", text)
                 continue
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            # High-resolution render for OCR
+            pix = page.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=False)
             png_bytes = pix.tobytes("png")
             try:
                 with Image.open(io.BytesIO(png_bytes)) as raw:
                     img = raw.convert("L")
                     try:
-                        ocr = _try_ocr(img)
+                        if _is_blank_image(img):
+                            ocr = ""
+                        else:
+                            ocr = _try_ocr(img)
                     finally:
                         img.close()
             except Exception:

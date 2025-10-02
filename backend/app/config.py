@@ -16,6 +16,8 @@ class Settings:
     CHAT_TEMPERATURE = float(os.getenv("CHAT_TEMPERATURE", "0.2"))
     CHAT_TOP_P = float(os.getenv("CHAT_TOP_P", "1.0"))
     CHAT_MAX_TOKENS = int(os.getenv("CHAT_MAX_TOKENS", "2048"))
+    CHAT_MAX_RETRIES = int(os.getenv("CHAT_MAX_RETRIES", "5"))
+    CHAT_BACKOFF_BASE = float(os.getenv("CHAT_BACKOFF_BASE", "0.6"))
 
     MAX_CHUNK_CHARS = int(os.getenv("MAX_CHUNK_CHARS", os.getenv("MAX_CHUNK_TOKENS", "1100")))
     CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "240"))
@@ -26,7 +28,10 @@ class Settings:
 
     AUTH_TOKEN_SECRET = os.getenv("AUTH_TOKEN_SECRET", "change-me")
     AUTH_TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", "86400"))
-    AUTH_USERS = os.getenv("AUTH_USERS", "username_changeme:password_changeme:role_changeme,username2_changeme:password2_changeme:role2_changeme")
+    AUTH_USERS = os.getenv(
+        "AUTH_USERS",
+        "username_changeme:password_changeme:role_changeme,username2_changeme:password2_changeme:role2_changeme",
+    )
     AUTH_HASH_ITERATIONS = int(os.getenv("AUTH_HASH_ITERATIONS", "120000"))
 
 
@@ -55,4 +60,3 @@ if settings.CHUNK_OVERLAP >= settings.MAX_CHUNK_CHARS:
 
 if settings.TOP_K > settings.MAX_CANDIDATE_CHUNKS:
     settings.MAX_CANDIDATE_CHUNKS = settings.TOP_K
-
