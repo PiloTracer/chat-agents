@@ -20,6 +20,7 @@ export default function Chat({ apiBase, token }: ChatProps) {
   const [answer, setAnswer] = useState<string | null>(null);
   const [sources, setSources] = useState<string[]>([]);
   const [dataProvider, setDataProvider] = useState<string>("");
+  const [dataModel, setDataModel] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -82,6 +83,7 @@ export default function Chat({ apiBase, token }: ChatProps) {
       );
       const data = response.data ?? {};
       setDataProvider(typeof data.provider === 'string' ? data.provider : '');
+      setDataModel(typeof data.model === 'string' ? data.model : '');
       setAnswer(data.answer ?? "");
       setSources(Array.isArray(data.sources) ? data.sources : []);
       if (!selectedAgent && typeof data.agent === "string") {
@@ -169,6 +171,12 @@ export default function Chat({ apiBase, token }: ChatProps) {
       {answer !== null && (
         <div style={{ display: "grid", gap: 8 }}>
           <h3>Answer</h3>
+          {(dataProvider || dataModel) && (
+            <div style={{ color: "#4b5563" }}>
+              Using provider: <strong>{dataProvider || 'n/a'}</strong>
+              {" "}| model: <strong>{dataModel || 'n/a'}</strong>
+            </div>
+          )}
           <div style={{ whiteSpace: "pre-wrap" }}>{answer}</div>
           {sourceEntries.length > 0 && (
             <>

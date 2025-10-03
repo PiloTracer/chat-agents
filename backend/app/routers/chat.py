@@ -384,6 +384,7 @@ async def ask(
 
     answer = (result.get("content") or "").strip()
     used_provider = result.get("provider", used_provider)
+    used_model = result.get("model", settings.CHAT_MODEL)
 
     if not answer:
         raise HTTPException(status_code=502, detail="No answer from chat provider")
@@ -391,6 +392,7 @@ async def ask(
     return {
         "ok": True,
         "provider": used_provider,
+        "model": used_model,
         "agent": agent_slug,
         "answer": answer,
         "sources": response_sources,

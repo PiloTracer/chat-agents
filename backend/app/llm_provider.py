@@ -60,21 +60,23 @@ class LLMProvider:
     ) -> Dict[str, str]:
         """
         Returns:
-            {"content": <str>, "provider": "openai"|"deepseek"}
+            {"content": <str>, "provider": "openai"|"deepseek", "model": <str>}
         """
         # Prefer request parameter; if missing/invalid, fall back to env default
-        primary = self._normalize_provider(provider) or self._default_provider()
+        requested = self._normalize_provider(provider)
+        primary = requested or self._default_provider()
         order = [primary]
-        if retries:
+        # Only consider cross-provider fallback when caller did not request a specific provider
+        if retries and getattr(settings, "ENABLE_PROVIDER_FALLBACK", False) and not requested:
             order += [p for p in ("openai", "deepseek") if p != primary]
 
         last_err: Optional[Exception] = None
         for prov in order:
             try:
-                content = await self._call_provider(
+                content, used_model = await self._call_provider(
                     prov, messages, model=model, temperature=temperature, max_tokens=max_tokens
                 )
-                return {"content": content, "provider": prov}
+                return {"content": content, "provider": prov, "model": used_model}
             except Exception as e:
                 last_err = e
                 logger.warning("LLM call failed on %s: %s", prov, e)
@@ -89,7 +91,7 @@ class LLMProvider:
         model: Optional[str],
         temperature: Optional[float],
         max_tokens: Optional[int],
-    ) -> str:
+    ) -> tuple[str, str]:
         cfg = self.providers.get(prov)
         if not cfg:
             raise RuntimeError(f"Unknown provider '{prov}'")
@@ -110,9 +112,26 @@ class LLMProvider:
             payload["max_tokens"] = max_tokens
 
         async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
-            resp = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
-            resp.raise_for_status()
+            try:
+                resp = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code if exc.response is not None else "?"
+                detail = None
+                try:
+                    errj = exc.response.json()
+                    detail = errj.get("error", {}).get("message") or errj.get("message") or str(errj)
+                except Exception:
+                    try:
+                        detail = exc.response.text
+                    except Exception:
+                        detail = str(exc)
+                raise RuntimeError(
+                    f"{prov} request failed ({status}) for model '{use_model}': {detail}"
+                ) from exc
+
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
+            return content, use_model
 
 llm_provider = LLMProvider()
