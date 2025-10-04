@@ -91,7 +91,7 @@ services:
     ports: ["18000:8000", "15678:5678"]
     volumes:
       - ./backend/app:/app/app
-      - ./backend/app/secrets/gen-lang-client-0992447456-3925b8f1f638.json:/secrets/gcp.json:ro
+      - ./backend/app/secrets/myaccount.json:/secrets/gcp.json:ro
 
   frontend:
     build:
