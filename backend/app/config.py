@@ -58,6 +58,16 @@ class Settings:
     # Soft limit for system/context chars when retrying after MAX_TOKENS
     GEMINI_TRUNCATE_SYSTEM_CHARS = int(os.getenv("GEMINI_TRUNCATE_SYSTEM_CHARS", "60000"))
 
+    # xAI Grok provider
+    GROK_API_BASE = os.getenv("GROK_API_BASE", "https://api.x.ai/v1")
+    GROK_API_KEY = os.getenv("GROK_API_KEY", "")
+    GROK_CHAT_MODEL = os.getenv("GROK_CHAT_MODEL", "grok-3")
+    GROK_MAX_TOKENS = int(os.getenv("GROK_MAX_TOKENS", "16384"))
+    GROK_CONTEXT_WINDOW = int(os.getenv("GROK_CONTEXT_WINDOW", "131072"))
+    GROK_ENABLE_CONTEXT_CACHE = os.getenv("GROK_ENABLE_CONTEXT_CACHE", "false").lower() in {"1", "true", "yes"}
+    GROK_CACHE_TTL_SECONDS = int(os.getenv("GROK_CACHE_TTL_SECONDS", "1800"))
+    GROK_CACHE_MIN_CHARS = int(os.getenv("GROK_CACHE_MIN_CHARS", "4000"))
+
     MAX_CHUNK_CHARS = int(os.getenv("MAX_CHUNK_CHARS", os.getenv("MAX_CHUNK_TOKENS", "1100")))
     CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "240"))
     TOP_K = int(os.getenv("TOP_K", "16"))
@@ -94,6 +104,10 @@ settings.MAX_CANDIDATE_CHUNKS = _as_positive_int("MAX_CANDIDATE_CHUNKS", setting
 settings.HTTP_TIMEOUT_SECONDS = max(1.0, settings.HTTP_TIMEOUT_SECONDS)
 settings.AUTH_TOKEN_TTL_SECONDS = _as_positive_int("AUTH_TOKEN_TTL_SECONDS", settings.AUTH_TOKEN_TTL_SECONDS)
 settings.AUTH_HASH_ITERATIONS = _as_positive_int("AUTH_HASH_ITERATIONS", settings.AUTH_HASH_ITERATIONS)
+settings.GROK_MAX_TOKENS = _as_positive_int("GROK_MAX_TOKENS", settings.GROK_MAX_TOKENS)
+settings.GROK_CONTEXT_WINDOW = _as_positive_int("GROK_CONTEXT_WINDOW", settings.GROK_CONTEXT_WINDOW)
+settings.GROK_CACHE_TTL_SECONDS = _as_positive_int("GROK_CACHE_TTL_SECONDS", settings.GROK_CACHE_TTL_SECONDS)
+settings.GROK_CACHE_MIN_CHARS = _as_positive_int("GROK_CACHE_MIN_CHARS", settings.GROK_CACHE_MIN_CHARS)
 
 if settings.CHUNK_OVERLAP >= settings.MAX_CHUNK_CHARS:
     settings.CHUNK_OVERLAP = max(0, settings.MAX_CHUNK_CHARS // 4)
@@ -109,6 +123,8 @@ try:
         settings.DEEPSEEK_API_KEY = settings.DEEPSEEK_API_KEY.strip()
     if isinstance(settings.GEMINI_API_KEY, str):
         settings.GEMINI_API_KEY = settings.GEMINI_API_KEY.strip()
+    if isinstance(settings.GROK_API_KEY, str):
+        settings.GROK_API_KEY = settings.GROK_API_KEY.strip()
 except Exception:
     pass
 
@@ -127,6 +143,16 @@ GEMINI_ENABLE_CONTEXT_CACHE = settings.GEMINI_ENABLE_CONTEXT_CACHE
 GEMINI_CACHE_TTL_SECONDS = settings.GEMINI_CACHE_TTL_SECONDS
 GEMINI_CACHE_MIN_CHARS = settings.GEMINI_CACHE_MIN_CHARS
 GEMINI_MAX_TOKENS = settings.GEMINI_MAX_TOKENS
+
+# xAI Grok re-exports
+GROK_API_BASE = settings.GROK_API_BASE
+GROK_API_KEY = settings.GROK_API_KEY
+GROK_CHAT_MODEL = settings.GROK_CHAT_MODEL
+GROK_MAX_TOKENS = settings.GROK_MAX_TOKENS
+GROK_CONTEXT_WINDOW = settings.GROK_CONTEXT_WINDOW
+GROK_ENABLE_CONTEXT_CACHE = settings.GROK_ENABLE_CONTEXT_CACHE
+GROK_CACHE_TTL_SECONDS = settings.GROK_CACHE_TTL_SECONDS
+GROK_CACHE_MIN_CHARS = settings.GROK_CACHE_MIN_CHARS
 
 # Vertex AI (OAuth-based) configuration
 class _VertexCfg:

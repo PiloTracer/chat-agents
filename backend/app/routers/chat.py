@@ -26,7 +26,7 @@ router = APIRouter()
 
 
 class AskPayload(BaseModel):
-    provider: str | None = Field(default=None, description="'gpt'|'openai' or 'deepseek' or 'gemini' or 'vertex'")
+    provider: str | None = Field(default=None, description="'gpt'|'openai' or 'deepseek' or 'gemini' or 'vertex' or 'grok'")
     question: str
     agent: str | None = None
     top_k: int = Field(default=settings.TOP_K, ge=1, le=settings.MAX_CANDIDATE_CHUNKS)

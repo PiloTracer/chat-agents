@@ -1,0 +1,144 @@
+diff --git a/app/config.py b/app/config.py
+index 1234567..89abcdef 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -62,8 +62,8 @@ class Settings:
+     GEMINI_CACHE_MIN_CHARS = int(os.getenv("GEMINI_CACHE_MIN_CHARS", "4000"))
+     GEMINI_MAX_TOKENS = int(os.getenv("GEMINI_MAX_TOKENS", "8192"))
+     GEMINI_TRUNCATE_SYSTEM_CHARS = int(os.getenv("GEMINI_TRUNCATE_SYSTEM_CHARS", "60000"))
+ 
+     # xAI Grok provider
+-    GROK_API_BASE = os.getenv("GROK_API_BASE", "https://api.x.ai/v1")
++    GROK_API_BASE = os.getenv("GROK_API_BASE", "https://api.x.ai/v1")
+     GROK_API_KEY = os.getenv("GROK_API_KEY", "")
+-    GROK_CHAT_MODEL = os.getenv("GROK_CHAT_MODEL", "grok-3")
++    GROK_CHAT_MODEL = os.getenv("GROK_CHAT_MODEL", "grok-4-fast-reasoning")
+     GROK_MAX_TOKENS = int(os.getenv("GROK_MAX_TOKENS", "16384"))
+-    GROK_CONTEXT_WINDOW = int(os.getenv("GROK_CONTEXT_WINDOW", "131072"))
++    GROK_CONTEXT_WINDOW = int(os.getenv("GROK_CONTEXT_WINDOW", "2000000"))
+     GROK_ENABLE_CONTEXT_CACHE = os.getenv("GROK_ENABLE_CONTEXT_CACHE", "false").lower() in {"1", "true", "yes"}
+     GROK_CACHE_TTL_SECONDS = int(os.getenv("GROK_CACHE_TTL_SECONDS", "1800"))
+     GROK_CACHE_MIN_CHARS = int(os.getenv("GROK_CACHE_MIN_CHARS", "4000"))
+diff --git a/app/llm_provider.py b/app/llm_provider.py
+index abcdef1..1234567 100644
+--- a/app/llm_provider.py
++++ b/app/llm_provider.py
+@@ -46,7 +46,7 @@ class LLMProvider:
+             },
+             "grok": {
+                 "base_url": getattr(settings, "GROK_API_BASE", "https://api.x.ai/v1").rstrip("/"),
+                 "api_key": getattr(settings, "GROK_API_KEY", ""),
+-                "default_model": getattr(settings, "GROK_CHAT_MODEL", "grok-3"),
++                "default_model": getattr(settings, "GROK_CHAT_MODEL", "grok-4-fast-reasoning"),
+             },
+         }
+         # In-memory cache for...
+@@ -125,0 +126,82 @@ class LLMProvider:
++    async def _call_openai_like(
++        self,
++        prov: str,
++        base_url: str,
++        api_key: str,
++        messages: List[Dict[str, str]],
++        model: str,
++        temperature: Optional[float],
++        max_tokens: Optional[int],
++    ) -> tuple[str, str]:
++        # Dynamic max_tokens for Grok (optimize large context)
++        effective_max_tokens = max_tokens or settings.CHAT_MAX_TOKENS
++        if prov == "grok":
++            effective_max_tokens = max_tokens or settings.GROK_MAX_TOKENS
++            # Estimate input tokens; truncate if near window (cost optimization)
++            try:
++                import tiktoken  # Optional; install via pip install tiktoken
++                enc = tiktoken.encoding_for_model("gpt-4")  # Approximation for Grok tokenization
++                input_tokens = sum(len(enc.encode(msg["content"])) for msg in messages)
++                context_window = settings.GROK_CONTEXT_WINDOW
++                if input_tokens > context_window * 0.9:  # Truncate if >90% full
++                    logger.warning("Input near Grok context limit (%d/%d); truncating system prompt.", input_tokens, context_window)
++                    # Truncate oldest messages (keep user query)
++                    while input_tokens > context_window * 0.8 and len(messages) > 2:
++                        messages.pop(1)  # Remove oldest non-system/user
++                        input_tokens = sum(len(enc.encode(msg["content"])) for msg in messages)
++                    effective_max_tokens = min(effective_max_tokens, context_window - input_tokens - 1000)  # Headroom
++                logger.info("Grok token estimate: input=%d, output_max=%d", input_tokens, effective_max_tokens)
++            except ImportError:
++                logger.warning("tiktoken not installed; skipping Grok token estimation and truncation.")
++            except Exception as e:
++                logger.warning("Grok token estimation failed: %s; proceeding without truncation.", str(e))
++
++        # Placeholder caching for Grok (future-proof; warn if enabled)
++        if prov == "grok" and settings.GROK_ENABLE_CONTEXT_CACHE:
++            logger.warning("Context caching not yet supported for Grok; ignoring.")
++            # Future: Implement if xAI adds support
++
++        headers = {
++            "Content-Type": "application/json",
++            "Authorization": f"Bearer {api_key}",
++        }
++        payload = {
++            "model": model,
++            "messages": messages,
++            "temperature": temperature or settings.CHAT_TEMPERATURE,
++            "max_tokens": effective_max_tokens,
++            "top_p": settings.CHAT_TOP_P,
++        }
++
++        async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
++            delay = settings.CHAT_BACKOFF_BASE
++            for attempt in range(settings.CHAT_MAX_RETRIES):
++                try:
++                    response = await client.post(
++                        f"{base_url}/chat/completions",
++                        headers=headers,
++                        json=payload,
++                    )
++                    response.raise_for_status()
++                    data = response.json()
++                    content = data["choices"][0]["message"]["content"].strip()
++                    # Auto-continue if truncated (for all OpenAI-like providers)
++                    if settings.CHAT_AUTO_CONTINUE and data["choices"][0]["finish_reason"] == "length":
++                        messages.append({"role": "assistant", "content": content})
++                        messages.append({"role": "user", "content": settings.CHAT_CONTINUE_PROMPT})
++                        more, _ = await self._call_openai_like(
++                            prov, base_url, api_key, messages, model, temperature, max_tokens
++                        )
++                        content += more
++                    return content, model
++                except httpx.HTTPStatusError as exc:
++                    logger.error("%s HTTP error (attempt %d): %s", prov, attempt + 1, str(exc))
++                    if attempt == settings.CHAT_MAX_RETRIES - 1:
++                        raise
++                    await asyncio.sleep(delay)
++                    delay *= 2
++                except Exception as exc:
++                    logger.error("%s chat failed (attempt %d): %s", prov, attempt + 1, str(exc))
++                    raise RuntimeError(f"{prov} chat failed: {exc}") from exc
+ 
+     # ... (rest of the original llm_provider.py code follows, unchanged)
+diff --git a/app/routers/chat.py b/app/routers/chat.py
+index 7654321..fedcba9 100644
+--- a/app/routers/chat.py
++++ b/app/routers/chat.py
+@@ -120,7 +120,7 @@ def _coverage_for_doc(db: Session, doc: Document) -> tuple[str, str, dict]:
+     if missing_pages:
+         lines.append(f"- missing_pages: {', '.join(str(p) for p in missing_pages)}")
+     else:
+         lines.append("- missing_pages: none")
+-    else:
++    if not page_range:
+         lines.append("- pages_covered: unknown (no page markers); using chunk ord only")
+     lines.append(f"- continuity_ok: {'yes' if continuity_ok else 'no'}")
+diff --git a/app/schemas.py b/app/schemas.py
+index fedcba9..7654321 100644
+--- a/app/schemas.py
++++ b/app/schemas.py
+@@ -16,7 +16,7 @@ class DocumentOut(BaseModel):
+     content_type: str
+
+ class AskRequest(BaseModel):
+-    provider: Optional[str] = None  # 'gpt'|'openai' or 'deepseek' or 'gemini' or 'vertex'
++    provider: Optional[str] = None  # 'gpt'|'openai' or 'deepseek' or 'gemini' or 'vertex' or 'grok'
+     question: str
+     agent_slug: Optional[str] = None  # if None, router decides
+     top_k: int = 24

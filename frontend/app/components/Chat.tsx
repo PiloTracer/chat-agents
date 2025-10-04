@@ -106,6 +106,7 @@ export default function Chat({ apiBase, token }: ChatProps) {
             <option value="deepseek">DeepSeek</option>
             <option value="gemini">Gemini</option>
             <option value="vertex">Vertex</option>
+            <option value="grok">Grok</option>
           </select>
         </label>
         <label style={{ display: "flex", gap: 8 }}>

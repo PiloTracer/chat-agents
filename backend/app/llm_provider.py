@@ -44,6 +44,11 @@ class LLMProvider:
                 "api_key": "",  # OAuth via google.auth
                 "default_model": getattr(settings, "VERTEX_CHAT_MODEL", "gemini-1.5-pro-002"),
             },
+            "grok": {
+                "base_url": getattr(settings, "GROK_API_BASE", "https://api.x.ai/v1").rstrip("/"),
+                "api_key": getattr(settings, "GROK_API_KEY", ""),
+                "default_model": getattr(settings, "GROK_CHAT_MODEL", "grok-4-fast-reasoning"),
+            },
         }
         # In-memory cache for Gemini context caching (resource name + expiry)
         self._gemini_cache: Dict[str, Tuple[str, float]] = {}
@@ -62,6 +67,8 @@ class LLMProvider:
             return "gemini"
         if pl in {"vertex", "gcp", "google-vertex"}:
             return "vertex"
+        if pl in {"grok", "xai"}:
+            return "grok"
         return None
 
     def _default_provider(self) -> str:
@@ -77,6 +84,8 @@ class LLMProvider:
                 return "openai"
             if "generativelanguage" in base or "googleapis.com" in base:
                 return "gemini"
+            if "x.ai" in base:
+                return "grok"
         except Exception:
             pass
         return "openai"
@@ -100,7 +109,7 @@ class LLMProvider:
         order = [primary]
         # Only consider cross-provider fallback when caller did not request a specific provider
         if retries and getattr(settings, "ENABLE_PROVIDER_FALLBACK", False) and not requested:
-            order += [p for p in ("openai", "deepseek", "gemini", "vertex") if p != primary]
+            order += [p for p in ("openai", "deepseek", "gemini", "vertex", "grok") if p != primary]
 
         last_err: Optional[Exception] = None
         for prov in order:
@@ -151,7 +160,21 @@ class LLMProvider:
         payload = {"model": use_model, "messages": list(messages)}
         if temperature is not None:
             payload["temperature"] = temperature
-        if max_tokens is not None:
+        # Prefer provider-specific caps when available
+        if prov == "grok":
+            try:
+                grok_cap = int(getattr(settings, "GROK_MAX_TOKENS", 16384))
+            except Exception:
+                grok_cap = 16384
+            if max_tokens is None:
+                payload["max_tokens"] = grok_cap
+            else:
+                try:
+                    # Favor Grok's larger window for fuller responses
+                    payload["max_tokens"] = max(1, max(int(max_tokens), grok_cap))
+                except Exception:
+                    payload["max_tokens"] = grok_cap
+        elif max_tokens is not None:
             payload["max_tokens"] = max_tokens
 
         async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
