@@ -11,6 +11,7 @@ from functools import lru_cache
 try:
     import google.auth  # type: ignore
     from google.auth.transport.requests import Request  # type: ignore
+    from google.auth.exceptions import DefaultCredentialsError, RefreshError  # type: ignore
 except Exception:  # pragma: no cover
     google = None  # type: ignore
 
@@ -297,16 +298,46 @@ class LLMProvider:
             "cache": f"{base}/projects/{project}/locations/{location}/cachedContents",
         }
 
-    @lru_cache(maxsize=1)
     def _vertex_access_token(self) -> str:
         if not getattr(settings, "VERTEX_USE_OAUTH", True):
             raise RuntimeError("VERTEX_USE_OAUTH=false is not supported; provide OAuth via ADC")
         if google is None:
             raise RuntimeError("google-auth is required for Vertex AI; install google-auth and configure ADC")
-        credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])  # type: ignore
-        if not credentials.valid:
-            request = Request()
-            credentials.refresh(request)
+        # Optional diagnostics for service account file
+        try:
+            import os, json  # local import to avoid module-level dependency
+            adc = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            if adc and not os.path.exists(adc):
+                raise RuntimeError(f"GOOGLE_APPLICATION_CREDENTIALS points to missing file: {adc}")
+            if adc:
+                try:
+                    with open(adc, "r", encoding="utf-8") as fh:
+                        data = json.load(fh)
+                    if str(data.get("type")) != "service_account":
+                        raise RuntimeError(
+                            f"GOOGLE_APPLICATION_CREDENTIALS must be a service account key; found type='{data.get('type')}'."
+                        )
+                except Exception:
+                    # Non-fatal; continue to default() which will surface errors
+                    pass
+        except Exception:
+            pass
+
+        try:
+            credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])  # type: ignore
+        except DefaultCredentialsError as e:
+            raise RuntimeError(
+                f"Failed to obtain Google ADC: {e}. Provide a valid service account JSON via GOOGLE_APPLICATION_CREDENTIALS, "
+                "or run 'gcloud auth application-default login' in dev environments."
+            ) from e
+        try:
+            if not credentials.valid:
+                request = Request()
+                credentials.refresh(request)
+        except RefreshError as e:
+            raise RuntimeError(
+                "Vertex OAuth refresh failed (invalid_grant). Likely causes: invalid/old service account key, clock skew, or revoked key."
+            ) from e
         return str(credentials.token)
 
     async def _vertex_get_model_output_limit(self, client: httpx.AsyncClient, endpoints: Dict[str, str], token: str) -> Optional[int]:
@@ -383,10 +414,11 @@ class LLMProvider:
                 base_payload["contents"] = [{"role": "user", "parts": [{"text": initial_context_text}]}] + list(initial_contents)
 
             model_limit = await self._vertex_get_model_output_limit(client, endpoints, token)
-            input_tokens = await self._vertex_count_tokens(client, endpoints, token, base_payload) or 0
-            # Leave a small buffer for safety metadata etc.
+            # Count tokens may be useful for diagnostics, but outputTokenLimit is independent
+            # of input size; do not subtract input tokens from output cap.
+            _ = await self._vertex_count_tokens(client, endpoints, token, base_payload)
             effective_cap = min([v for v in [cap, model_limit] if isinstance(v, int) and v > 0] or [cap])
-            available = max(256, effective_cap - input_tokens - 64)
+            available = max(256, effective_cap)
             if max_tokens is not None:
                 try:
                     available = max(1, min(available, int(max_tokens)))
