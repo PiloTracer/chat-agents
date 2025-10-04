@@ -15,7 +15,18 @@ class Settings:
     CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1")
     CHAT_TEMPERATURE = float(os.getenv("CHAT_TEMPERATURE", "0.2"))
     CHAT_TOP_P = float(os.getenv("CHAT_TOP_P", "1.0"))
+    # Soft per-call output size. Overall responses are not limited when
+    # auto-continue is enabled (see CHAT_AUTO_CONTINUE / CHAT_CONTINUE_MAX_CALLS).
     CHAT_MAX_TOKENS = int(os.getenv("CHAT_MAX_TOKENS", "2048"))
+    # Automatically continue generation across calls when the provider
+    # stops due to length/MaxTokens. Ensures complete responses.
+    CHAT_AUTO_CONTINUE = os.getenv("CHAT_AUTO_CONTINUE", "true").lower() in {"1", "true", "yes"}
+    CHAT_CONTINUE_MAX_CALLS = int(os.getenv("CHAT_CONTINUE_MAX_CALLS", "12"))
+    CHAT_CONTINUE_PROMPT = os.getenv(
+        "CHAT_CONTINUE_PROMPT",
+        # Keep ASCII and concise to avoid token bloat
+        "Continue exactly where you left off. Do not repeat earlier text.",
+    )
     CHAT_MAX_RETRIES = int(os.getenv("CHAT_MAX_RETRIES", "5"))
     CHAT_BACKOFF_BASE = float(os.getenv("CHAT_BACKOFF_BASE", "0.6"))
     # Which chat provider to use by default when a request does not specify one.
@@ -75,6 +86,7 @@ settings = Settings()
 settings.EMBEDDING_BATCH_SIZE = _as_positive_int("EMBEDDING_BATCH_SIZE", settings.EMBEDDING_BATCH_SIZE)
 settings.EMBEDDING_TARGET_DIM = _as_positive_int("EMBEDDING_TARGET_DIM", settings.EMBEDDING_TARGET_DIM)
 settings.CHAT_MAX_TOKENS = _as_positive_int("CHAT_MAX_TOKENS", settings.CHAT_MAX_TOKENS)
+settings.CHAT_CONTINUE_MAX_CALLS = _as_positive_int("CHAT_CONTINUE_MAX_CALLS", settings.CHAT_CONTINUE_MAX_CALLS)
 settings.MAX_CHUNK_CHARS = _as_positive_int("MAX_CHUNK_CHARS", settings.MAX_CHUNK_CHARS)
 settings.CHUNK_OVERLAP = max(0, settings.CHUNK_OVERLAP)
 settings.TOP_K = _as_positive_int("TOP_K", settings.TOP_K)

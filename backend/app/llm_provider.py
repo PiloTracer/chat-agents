@@ -148,34 +148,72 @@ class LLMProvider:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
         }
-        payload = {"model": use_model, "messages": messages}
+        payload = {"model": use_model, "messages": list(messages)}
         if temperature is not None:
             payload["temperature"] = temperature
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
 
         async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
-            try:
-                resp = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code if exc.response is not None else "?"
-                detail = None
+            # Helper to perform a single chat.completions call
+            async def _single_call(msgs: List[Dict[str, str]]) -> tuple[str, Optional[str]]:
+                pl = {"model": use_model, "messages": msgs}
+                if temperature is not None:
+                    pl["temperature"] = temperature
+                if max_tokens is not None:
+                    pl["max_tokens"] = max_tokens
                 try:
-                    errj = exc.response.json()
-                    detail = errj.get("error", {}).get("message") or errj.get("message") or str(errj)
-                except Exception:
+                    r = await client.post(f"{base_url}/chat/completions", headers=headers, json=pl)
+                    r.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    status = exc.response.status_code if exc.response is not None else "?"
+                    detail = None
                     try:
-                        detail = exc.response.text
+                        errj = exc.response.json()
+                        detail = errj.get("error", {}).get("message") or errj.get("message") or str(errj)
                     except Exception:
-                        detail = str(exc)
-                raise RuntimeError(
-                    f"{prov} request failed ({status}) for model '{use_model}': {detail}"
-                ) from exc
+                        try:
+                            detail = exc.response.text
+                        except Exception:
+                            detail = str(exc)
+                    raise RuntimeError(
+                        f"{prov} request failed ({status}) for model '{use_model}': {detail}"
+                    ) from exc
+                dj = r.json()
+                try:
+                    choice0 = (dj.get("choices") or [{}])[0] or {}
+                    txt = ((choice0.get("message") or {}).get("content") or "").strip()
+                    finish = choice0.get("finish_reason")
+                except Exception:
+                    txt = ""
+                    finish = None
+                return txt, finish if isinstance(finish, str) else None
 
-            data = resp.json()
-            content = data["choices"][0]["message"]["content"]
-            return content, use_model
+            # First call
+            acc, finish_reason = await _single_call(list(messages))
+            if not acc:
+                return "", use_model
+
+            # Auto-continue for OpenAI-like providers when cut off by length
+            if getattr(settings, "CHAT_AUTO_CONTINUE", True):
+                calls = 1
+                max_calls = max(1, int(getattr(settings, "CHAT_CONTINUE_MAX_CALLS", 12)))
+                continue_prompt = str(getattr(settings, "CHAT_CONTINUE_PROMPT", "Continue"))
+                base_history: List[Dict[str, str]] = list(messages)
+                last_chunk = acc
+                while isinstance(finish_reason, str) and finish_reason.lower() in {"length", "max_tokens"} and calls < max_calls:
+                    # Extend conversation with only the last model chunk and a continue cue
+                    extended: List[Dict[str, str]] = base_history + [
+                        {"role": "assistant", "content": last_chunk},
+                        {"role": "user", "content": continue_prompt},
+                    ]
+                    nxt, finish_reason = await _single_call(extended)
+                    if not nxt:
+                        break
+                    acc += nxt
+                    last_chunk = nxt
+                    calls += 1
+            return acc, use_model
 
     def _gemini_model_path(self, model: str) -> str:
         m = (model or "").strip()
@@ -431,13 +469,15 @@ class LLMProvider:
             sys_text_for_attempt = initial_system_text
             context_text_for_attempt = initial_context_text
             cfg_for_attempt = dict(gen_cfg)
+            cached_context_name: Optional[str] = None
             while attempt < 2:
                 local_contents = list(initial_contents)
                 system_instruction = None
-                if context_text_for_attempt and getattr(settings, "VERTEX_ENABLE_CONTEXT_CACHE", True) and attempt == 0:
-                    cached = await self._vertex_create_cached(client, endpoints, token, context_text_for_attempt)
-                    if cached:
-                        local_contents = [{"role": "user", "parts": [{"cachedContent": cached}]}] + local_contents
+                if context_text_for_attempt and getattr(settings, "VERTEX_ENABLE_CONTEXT_CACHE", True):
+                    if cached_context_name is None and attempt == 0:
+                        cached_context_name = await self._vertex_create_cached(client, endpoints, token, context_text_for_attempt)
+                    if cached_context_name:
+                        local_contents = [{"role": "user", "parts": [{"cachedContent": cached_context_name}]}] + local_contents
                     else:
                         local_contents = [{"role": "user", "parts": [{"text": context_text_for_attempt}]}] + local_contents
                 elif context_text_for_attempt:
@@ -479,6 +519,44 @@ class LLMProvider:
                     content_text = ""
 
                 if content_text:
+                    # Auto-continue when hitting MAX_TOKENS by making follow-up calls
+                    if getattr(settings, "CHAT_AUTO_CONTINUE", True) and finish == "MAX_TOKENS":
+                        acc = content_text
+                        calls = 1
+                        max_calls = max(1, int(getattr(settings, "CHAT_CONTINUE_MAX_CALLS", 12)))
+                        continue_prompt = str(getattr(settings, "CHAT_CONTINUE_PROMPT", "Continue"))
+                        last_chunk = content_text
+                        while finish == "MAX_TOKENS" and calls < max_calls:
+                            cont_contents = []
+                            if context_text_for_attempt:
+                                if cached_context_name:
+                                    cont_contents.append({"role": "user", "parts": [{"cachedContent": cached_context_name}]})
+                                else:
+                                    cont_contents.append({"role": "user", "parts": [{"text": context_text_for_attempt}]})
+                            cont_contents += list(initial_contents)
+                            cont_contents.append({"role": "model", "parts": [{"text": last_chunk}]})
+                            cont_contents.append({"role": "user", "parts": [{"text": continue_prompt}]})
+
+                            payload2: Dict[str, object] = {"contents": cont_contents, "generationConfig": cfg_for_attempt}
+                            if system_instruction is not None:
+                                payload2["systemInstruction"] = system_instruction
+                            r2 = await client.post(endpoints["gen"], headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload2)
+                            r2.raise_for_status()
+                            d2 = r2.json()
+                            try:
+                                cand2 = (d2.get("candidates") or [{}])[0] or {}
+                                finish = cand2.get("finishReason")
+                                parts2 = (cand2.get("content") or {}).get("parts") or []
+                                more = "".join([p.get("text") for p in parts2 if isinstance(p, dict) and isinstance(p.get("text"), str)]).strip()
+                            except Exception:
+                                more = ""
+                                finish = None
+                            if not more:
+                                break
+                            acc += more
+                            last_chunk = more
+                            calls += 1
+                        return acc, endpoints["model"]
                     return content_text, endpoints["model"]
 
                 if finish == "MAX_TOKENS" and attempt == 0:
@@ -550,6 +628,8 @@ class LLMProvider:
                         cfg_for_attempt["maxOutputTokens"] = min(int(model_out_limit), current)
             except Exception:
                 pass
+            # Persist cached context name across attempts and continuations
+            cached_context_name: Optional[str] = None
             while attempt < 2:
                 # Prefer systemInstruction for guidance; attach large context as user content
                 system_instruction: Optional[dict] = None
@@ -558,15 +638,12 @@ class LLMProvider:
                 if context_text_for_attempt:
                     can_cache = (
                         getattr(settings, "GEMINI_ENABLE_CONTEXT_CACHE", True)
-                        and attempt == 0
                         and "generativelanguage.googleapis.com" not in (base_url or "")
                     )
-                    if can_cache:
-                        cached_name = await self._gemini_get_or_create_cached(client, base_url, api_key, context_text_for_attempt)
-                        if cached_name:
-                            local_contents = [{"role": "user", "parts": [{"cachedContent": cached_name}]}] + local_contents
-                        else:
-                            local_contents = [{"role": "user", "parts": [{"text": context_text_for_attempt}]}] + local_contents
+                    if can_cache and cached_context_name is None:
+                        cached_context_name = await self._gemini_get_or_create_cached(client, base_url, api_key, context_text_for_attempt)
+                    if cached_context_name:
+                        local_contents = [{"role": "user", "parts": [{"cachedContent": cached_context_name}]}] + local_contents
                     else:
                         local_contents = [{"role": "user", "parts": [{"text": context_text_for_attempt}]}] + local_contents
 
@@ -604,7 +681,7 @@ class LLMProvider:
 
                 data = resp.json()
                 # Extract first candidate text; fall back to top-level text if present
-                content_text = ""
+                chunk_text = ""
                 finish = None
                 try:
                     cand0 = (data.get("candidates") or [{}])[0] or {}
@@ -617,36 +694,69 @@ class LLMProvider:
                         t = p.get("text")
                         if isinstance(t, str) and t.strip():
                             texts.append(t)
-                    content_text = "".join(texts).strip()
-                    if not content_text and isinstance(data.get("text"), str):
-                        content_text = data.get("text").strip()
+                    chunk_text = "".join(texts).strip()
+                    if not chunk_text and isinstance(data.get("text"), str):
+                        chunk_text = data.get("text").strip()
                 except Exception:
-                    content_text = ""
+                    chunk_text = ""
 
-                if content_text:
-                    return content_text, model_path
+                if not chunk_text:
+                    # Retry strategy when no content was produced and MAX_TOKENS signaled
+                    if finish == "MAX_TOKENS" and attempt == 0:
+                        try:
+                            limit = int(getattr(settings, "GEMINI_TRUNCATE_SYSTEM_CHARS", 60000))
+                            if isinstance(context_text_for_attempt, str) and len(context_text_for_attempt) > limit:
+                                context_text_for_attempt = context_text_for_attempt[:limit] + "\n\n[... truncated for length ...]"
+                            elif isinstance(sys_text_for_attempt, str) and len(sys_text_for_attempt) > limit:
+                                sys_text_for_attempt = sys_text_for_attempt[:limit] + "\n\n[... truncated for length ...]"
+                        except Exception:
+                            pass
+                        attempt += 1
+                        continue
+                    msg = f"gemini returned empty text (finish={finish})"
+                    raise RuntimeError(msg)
 
-                # Retry strategy on MAX_TOKENS: shrink output, truncate payload
-                if finish == "MAX_TOKENS" and attempt == 0:
-                    try:
-                        current_max = int(cfg_for_attempt.get("maxOutputTokens", 1024))
-                        cfg_for_attempt["maxOutputTokens"] = max(256, current_max // 2)
-                    except Exception:
-                        cfg_for_attempt["maxOutputTokens"] = 512
-                    try:
-                        limit = int(getattr(settings, "GEMINI_TRUNCATE_SYSTEM_CHARS", 60000))
-                        if isinstance(context_text_for_attempt, str) and len(context_text_for_attempt) > limit:
-                            context_text_for_attempt = context_text_for_attempt[:limit] + "\n\n[... truncated for length ...]"
-                        elif isinstance(sys_text_for_attempt, str) and len(sys_text_for_attempt) > limit:
-                            sys_text_for_attempt = sys_text_for_attempt[:limit] + "\n\n[... truncated for length ...]"
-                    except Exception:
-                        pass
-                    attempt += 1
-                    continue
+                # If content exists and was cut due to MAX_TOKENS, auto-continue across calls
+                acc = chunk_text
+                if getattr(settings, "CHAT_AUTO_CONTINUE", True):
+                    calls = 1
+                    max_calls = max(1, int(getattr(settings, "CHAT_CONTINUE_MAX_CALLS", 12)))
+                    continue_prompt = str(getattr(settings, "CHAT_CONTINUE_PROMPT", "Continue"))
+                    last_chunk = chunk_text
+                    while finish == "MAX_TOKENS" and calls < max_calls:
+                        # Build minimal history to continue: context + initial turn + last model chunk + 'continue'
+                        cont_contents = []
+                        if context_text_for_attempt:
+                            if cached_context_name:
+                                cont_contents.append({"role": "user", "parts": [{"cachedContent": cached_context_name}]})
+                            else:
+                                cont_contents.append({"role": "user", "parts": [{"text": context_text_for_attempt}]})
+                        cont_contents += list(initial_contents)
+                        cont_contents.append({"role": "model", "parts": [{"text": last_chunk}]})
+                        cont_contents.append({"role": "user", "parts": [{"text": continue_prompt}]})
 
-                # No content and not retryable
-                msg = f"gemini returned empty text (finish={finish})"
-                raise RuntimeError(msg)
+                        payload2: dict = {"contents": cont_contents, "generationConfig": cfg_for_attempt}
+                        if sys_text_for_attempt:
+                            payload2["systemInstruction"] = {"parts": [{"text": sys_text_for_attempt}]}
+                        r2 = await client.post(f"{base_url}/{model_path}:generateContent?key={api_key}", headers={"Content-Type": "application/json"}, json=payload2)
+                        r2.raise_for_status()
+                        dj2 = r2.json()
+                        try:
+                            cand = (dj2.get("candidates") or [{}])[0] or {}
+                            finish = cand.get("finishReason")
+                            parts2 = (cand.get("content") or {}).get("parts") or []
+                            more = "".join([p.get("text") for p in parts2 if isinstance(p, dict) and isinstance(p.get("text"), str)])
+                            more = (more or "").strip()
+                        except Exception:
+                            more = ""
+                            finish = None
+                        if not more:
+                            break
+                        acc += more
+                        last_chunk = more
+                        calls += 1
+
+                return acc, model_path
 
     async def chat_completion_batch(
         self,
