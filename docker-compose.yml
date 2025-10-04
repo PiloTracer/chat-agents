@@ -53,6 +53,19 @@ services:
       GEMINI_CACHE_TTL_SECONDS: ${GEMINI_CACHE_TTL_SECONDS:-1800}
       GEMINI_CACHE_MIN_CHARS: ${GEMINI_CACHE_MIN_CHARS:-4000}
       GEMINI_MAX_TOKENS: ${GEMINI_MAX_TOKENS:-8192}
+      # Vertex AI (OAuth)
+      VERTEX_PROJECT_ID: ${VERTEX_PROJECT_ID:-}
+      VERTEX_LOCATION: ${VERTEX_LOCATION:-us-east1}
+      VERTEX_PUBLISHER: ${VERTEX_PUBLISHER:-google}
+      VERTEX_CHAT_MODEL: ${VERTEX_CHAT_MODEL:-gemini-1.5-pro-002}
+      VERTEX_ENABLE_CONTEXT_CACHE: ${VERTEX_ENABLE_CONTEXT_CACHE:-true}
+      VERTEX_CACHE_TTL_SECONDS: ${VERTEX_CACHE_TTL_SECONDS:-1800}
+      VERTEX_CACHE_MIN_CHARS: ${VERTEX_CACHE_MIN_CHARS:-4000}
+      VERTEX_MAX_TOKENS: ${VERTEX_MAX_TOKENS:-8192}
+      VERTEX_TRUNCATE_SYSTEM_CHARS: ${VERTEX_TRUNCATE_SYSTEM_CHARS:-60000}
+      VERTEX_USE_OAUTH: ${VERTEX_USE_OAUTH:-true}
+      # Optional: mount SA credentials and set ADC path
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
       GCP_LOCATION: ${GCP_LOCATION:-us-central1}
       API_KEY: ${API_KEY:-replace_me}
       AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-change-me}
@@ -78,6 +91,7 @@ services:
     ports: ["18000:8000", "15678:5678"]
     volumes:
       - ./backend/app:/app/app
+      - ./backend/app/secrets/gen-lang-client-0992447456-3925b8f1f638.json:/secrets/gcp.json:ro
 
   frontend:
     build:

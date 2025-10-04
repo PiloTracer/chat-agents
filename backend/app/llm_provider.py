@@ -6,6 +6,13 @@ import httpx
 import hashlib
 import time
 import asyncio
+from functools import lru_cache
+
+try:
+    import google.auth  # type: ignore
+    from google.auth.transport.requests import Request  # type: ignore
+except Exception:  # pragma: no cover
+    google = None  # type: ignore
 
 from app.config import settings
 
@@ -30,6 +37,12 @@ class LLMProvider:
                 "api_key": getattr(settings, "GEMINI_API_KEY", ""),
                 "default_model": getattr(settings, "GEMINI_CHAT_MODEL", "gemini-1.5-pro"),
             },
+            "vertex": {
+                # Base is derived from location below when used
+                "base_url": f"https://{getattr(settings, 'VERTEX_LOCATION', 'us-east1')}-aiplatform.googleapis.com/v1",
+                "api_key": "",  # OAuth via google.auth
+                "default_model": getattr(settings, "VERTEX_CHAT_MODEL", "gemini-1.5-pro-002"),
+            },
         }
         # In-memory cache for Gemini context caching (resource name + expiry)
         self._gemini_cache: Dict[str, Tuple[str, float]] = {}
@@ -44,8 +57,10 @@ class LLMProvider:
             return "openai"
         if pl in {"deepseek", "ds"}:
             return "deepseek"
-        if pl in {"gemini", "google", "vertex"}:
+        if pl in {"gemini", "google"}:
             return "gemini"
+        if pl in {"vertex", "gcp", "google-vertex"}:
+            return "vertex"
         return None
 
     def _default_provider(self) -> str:
@@ -84,7 +99,7 @@ class LLMProvider:
         order = [primary]
         # Only consider cross-provider fallback when caller did not request a specific provider
         if retries and getattr(settings, "ENABLE_PROVIDER_FALLBACK", False) and not requested:
-            order += [p for p in ("openai", "deepseek", "gemini") if p != primary]
+            order += [p for p in ("openai", "deepseek", "gemini", "vertex") if p != primary]
 
         last_err: Optional[Exception] = None
         for prov in order:
@@ -114,11 +129,19 @@ class LLMProvider:
         base_url = cfg["base_url"]
         api_key = cfg["api_key"]
         use_model = model or cfg["default_model"]
+
+        # Vertex uses OAuth (ADC), not API keys
+        if prov == "vertex":
+            return await self._call_vertex(messages, use_model, temperature, max_tokens)
+
+        # Gemini GL requires API key
+        if prov == "gemini":
+            if not api_key:
+                raise RuntimeError(f"Missing API key for provider '{prov}'")
+            return await self._call_gemini(base_url, api_key, messages, use_model, temperature, max_tokens)
+
         if not api_key:
             raise RuntimeError(f"Missing API key for provider '{prov}'")
-
-        if prov == "gemini":
-            return await self._call_gemini(base_url, api_key, messages, use_model, temperature, max_tokens)
 
         headers = {
             "Content-Type": "application/json",
@@ -257,6 +280,194 @@ class LLMProvider:
         except Exception:
             return None
         return None
+
+    # ---------------- Vertex AI helpers ----------------
+    def _vertex_endpoints(self, model: Optional[str]) -> Dict[str, str]:
+        location = getattr(settings, "VERTEX_LOCATION", "us-east1")
+        project = getattr(settings, "VERTEX_PROJECT_ID", "")
+        publisher = getattr(settings, "VERTEX_PUBLISHER", "google")
+        model_name = model or getattr(settings, "VERTEX_CHAT_MODEL", "gemini-1.5-pro-002")
+        base = f"https://{location}-aiplatform.googleapis.com/v1"
+        model_path = f"projects/{project}/locations/{location}/publishers/{publisher}/models/{model_name}"
+        return {
+            "base": base,
+            "model": model_path,
+            "gen": f"{base}/{model_path}:generateContent",
+            "count": f"{base}/{model_path}:countTokens",
+            "cache": f"{base}/projects/{project}/locations/{location}/cachedContents",
+        }
+
+    @lru_cache(maxsize=1)
+    def _vertex_access_token(self) -> str:
+        if not getattr(settings, "VERTEX_USE_OAUTH", True):
+            raise RuntimeError("VERTEX_USE_OAUTH=false is not supported; provide OAuth via ADC")
+        if google is None:
+            raise RuntimeError("google-auth is required for Vertex AI; install google-auth and configure ADC")
+        credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])  # type: ignore
+        if not credentials.valid:
+            request = Request()
+            credentials.refresh(request)
+        return str(credentials.token)
+
+    async def _vertex_get_model_output_limit(self, client: httpx.AsyncClient, endpoints: Dict[str, str], token: str) -> Optional[int]:
+        try:
+            resp = await client.get(endpoints["model"].replace(endpoints["base"] + "/", endpoints["base"] + "/"), headers={"Authorization": f"Bearer {token}"})
+            resp.raise_for_status()
+            data = resp.json()
+            lim = data.get("outputTokenLimit")
+            return int(lim) if isinstance(lim, int) and lim > 0 else None
+        except Exception:
+            return None
+
+    async def _vertex_create_cached(self, client: httpx.AsyncClient, endpoints: Dict[str, str], token: str, text: str) -> Optional[str]:
+        ttl = getattr(settings, "VERTEX_CACHE_TTL_SECONDS", 1800)
+        min_chars = getattr(settings, "VERTEX_CACHE_MIN_CHARS", 4000)
+        if len(text or "") < max(0, int(min_chars)):
+            return None
+        payload = {
+            "displayName": f"cached-context-{hashlib.sha256(text.encode('utf-8')).hexdigest()[:8]}",
+            "ttl": f"{int(ttl)}s",
+            "contents": [{"role": "user", "parts": [{"text": text}]}],
+        }
+        try:
+            resp = await client.post(endpoints["cache"], headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            name = data.get("name")
+            return str(name) if isinstance(name, str) and name else None
+        except Exception:
+            return None
+
+    async def _vertex_count_tokens(self, client: httpx.AsyncClient, endpoints: Dict[str, str], token: str, payload: Dict[str, object]) -> Optional[int]:
+        try:
+            resp = await client.post(endpoints["count"], headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            # totalTokens or usage metadata fields may exist
+            total = data.get("totalTokens") or data.get("inputTokenCount")
+            return int(total) if isinstance(total, int) and total > 0 else None
+        except Exception:
+            return None
+
+    async def _call_vertex(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+    ) -> tuple[str, str]:
+        endpoints = self._vertex_endpoints(model)
+        token = self._vertex_access_token()
+
+        initial_system_text, initial_context_text, initial_contents = self._gemini_convert_messages(messages)
+
+        gen_cfg: dict = {"responseMimeType": "text/plain"}
+        if temperature is not None:
+            gen_cfg["temperature"] = float(temperature)
+        top_p = getattr(settings, "CHAT_TOP_P", None)
+        if top_p is not None:
+            gen_cfg["topP"] = float(top_p)
+        # Cap with VERTEX_MAX_TOKENS; exact value sized after countTokens
+        try:
+            cap = int(getattr(settings, "VERTEX_MAX_TOKENS", 8192))
+        except Exception:
+            cap = 8192
+
+        async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
+            # Base payload for counting
+            base_payload: Dict[str, object] = {"contents": list(initial_contents)}
+            if initial_system_text:
+                base_payload["systemInstruction"] = {"parts": [{"text": initial_system_text}]}
+            # Attach context for counting
+            if initial_context_text:
+                base_payload["contents"] = [{"role": "user", "parts": [{"text": initial_context_text}]}] + list(initial_contents)
+
+            model_limit = await self._vertex_get_model_output_limit(client, endpoints, token)
+            input_tokens = await self._vertex_count_tokens(client, endpoints, token, base_payload) or 0
+            # Leave a small buffer for safety metadata etc.
+            effective_cap = min([v for v in [cap, model_limit] if isinstance(v, int) and v > 0] or [cap])
+            available = max(256, effective_cap - input_tokens - 64)
+            if max_tokens is not None:
+                try:
+                    available = max(1, min(available, int(max_tokens)))
+                except Exception:
+                    pass
+            gen_cfg["maxOutputTokens"] = available
+
+            # Attempt, with one retry on MAX_TOKENS
+            attempt = 0
+            sys_text_for_attempt = initial_system_text
+            context_text_for_attempt = initial_context_text
+            cfg_for_attempt = dict(gen_cfg)
+            while attempt < 2:
+                local_contents = list(initial_contents)
+                system_instruction = None
+                if context_text_for_attempt and getattr(settings, "VERTEX_ENABLE_CONTEXT_CACHE", True) and attempt == 0:
+                    cached = await self._vertex_create_cached(client, endpoints, token, context_text_for_attempt)
+                    if cached:
+                        local_contents = [{"role": "user", "parts": [{"cachedContent": cached}]}] + local_contents
+                    else:
+                        local_contents = [{"role": "user", "parts": [{"text": context_text_for_attempt}]}] + local_contents
+                elif context_text_for_attempt:
+                    local_contents = [{"role": "user", "parts": [{"text": context_text_for_attempt}]}] + local_contents
+
+                if sys_text_for_attempt:
+                    system_instruction = {"parts": [{"text": sys_text_for_attempt}]}
+
+                payload: Dict[str, object] = {"contents": local_contents, "generationConfig": cfg_for_attempt}
+                if system_instruction is not None:
+                    payload["systemInstruction"] = system_instruction
+                try:
+                    resp = await client.post(endpoints["gen"], headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload)
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    status = exc.response.status_code if exc.response is not None else "?"
+                    detail = None
+                    try:
+                        errj = exc.response.json()
+                        detail = errj.get("error", {}).get("message") or errj.get("message") or str(errj)
+                    except Exception:
+                        try:
+                            detail = exc.response.text
+                        except Exception:
+                            detail = str(exc)
+                    raise RuntimeError(f"vertex request failed ({status}) for model '{endpoints['model']}': {detail}") from exc
+
+                data = resp.json()
+                # Extract text
+                content_text = ""
+                finish = None
+                try:
+                    cand0 = (data.get("candidates") or [{}])[0] or {}
+                    finish = cand0.get("finishReason")
+                    parts = (cand0.get("content") or {}).get("parts") or []
+                    texts = [p.get("text") for p in parts if isinstance(p, dict) and isinstance(p.get("text"), str)]
+                    content_text = "".join(texts).strip()
+                except Exception:
+                    content_text = ""
+
+                if content_text:
+                    return content_text, endpoints["model"]
+
+                if finish == "MAX_TOKENS" and attempt == 0:
+                    # Retry with smaller output and truncated payload
+                    try:
+                        current_max = int(cfg_for_attempt.get("maxOutputTokens", 1024))
+                        cfg_for_attempt["maxOutputTokens"] = max(256, current_max // 2)
+                    except Exception:
+                        cfg_for_attempt["maxOutputTokens"] = 512
+                    try:
+                        limit = int(getattr(settings, "VERTEX_TRUNCATE_SYSTEM_CHARS", 60000))
+                        if isinstance(context_text_for_attempt, str) and len(context_text_for_attempt) > limit:
+                            context_text_for_attempt = context_text_for_attempt[:limit] + "\n\n[... truncated for length ...]"
+                        elif isinstance(sys_text_for_attempt, str) and len(sys_text_for_attempt) > limit:
+                            sys_text_for_attempt = sys_text_for_attempt[:limit] + "\n\n[... truncated for length ...]"
+                    except Exception:
+                        pass
+                    attempt += 1
+                    continue
+
+                raise RuntimeError(f"vertex returned empty text (finish={finish})")
 
     async def _call_gemini(
         self,

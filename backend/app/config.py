@@ -115,4 +115,20 @@ GEMINI_ENABLE_CONTEXT_CACHE = settings.GEMINI_ENABLE_CONTEXT_CACHE
 GEMINI_CACHE_TTL_SECONDS = settings.GEMINI_CACHE_TTL_SECONDS
 GEMINI_CACHE_MIN_CHARS = settings.GEMINI_CACHE_MIN_CHARS
 GEMINI_MAX_TOKENS = settings.GEMINI_MAX_TOKENS
+
+# Vertex AI (OAuth-based) configuration
+class _VertexCfg:
+    pass
+
+# Prefer explicit Vertex-prefixed environment variables for clarity
+settings.VERTEX_PROJECT_ID = os.getenv("VERTEX_PROJECT_ID", os.getenv("GCP_PROJECT_ID", ""))
+settings.VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", os.getenv("GCP_LOCATION", "us-east1"))
+settings.VERTEX_PUBLISHER = os.getenv("VERTEX_PUBLISHER", "google")
+settings.VERTEX_CHAT_MODEL = os.getenv("VERTEX_CHAT_MODEL", "gemini-1.5-pro-002")
+settings.VERTEX_ENABLE_CONTEXT_CACHE = os.getenv("VERTEX_ENABLE_CONTEXT_CACHE", "true").lower() in {"1", "true", "yes"}
+settings.VERTEX_CACHE_TTL_SECONDS = int(os.getenv("VERTEX_CACHE_TTL_SECONDS", "1800"))
+settings.VERTEX_CACHE_MIN_CHARS = int(os.getenv("VERTEX_CACHE_MIN_CHARS", "4000"))
+settings.VERTEX_MAX_TOKENS = int(os.getenv("VERTEX_MAX_TOKENS", "8192"))
+settings.VERTEX_TRUNCATE_SYSTEM_CHARS = int(os.getenv("VERTEX_TRUNCATE_SYSTEM_CHARS", "60000"))
+settings.VERTEX_USE_OAUTH = os.getenv("VERTEX_USE_OAUTH", "true").lower() in {"1", "true", "yes"}
 GEMINI_TRUNCATE_SYSTEM_CHARS = settings.GEMINI_TRUNCATE_SYSTEM_CHARS

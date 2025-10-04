@@ -17,7 +17,7 @@ class DocumentOut(BaseModel):
     content_type: str
 
 class AskRequest(BaseModel):
-    provider: Optional[str] = None  # 'gpt'|'openai' or 'deepseek' or 'gemini'
+    provider: Optional[str] = None  # 'gpt'|'openai' or 'deepseek' or 'gemini' or 'vertex'
     question: str
     agent_slug: Optional[str] = None  # if None, router decides
     top_k: int = 24
