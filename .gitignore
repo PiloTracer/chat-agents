@@ -102,4 +102,4 @@ dbdata/
 
 # other
 /samples
-/secrets
+**/secrets/
