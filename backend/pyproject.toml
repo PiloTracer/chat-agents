@@ -22,6 +22,7 @@ dependencies = [
   "typing-extensions>=4.12",
   "pgvector>=0.4.1",
   "debugpy>=1.8.17",
+  "google-genai>=1.41.0",
 
   # --- Added for robust parsing/OCR fallback ---
   "pillow>=10.4",

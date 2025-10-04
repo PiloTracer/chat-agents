@@ -1,0 +1,540 @@
+This is an exciting project! Integrating Google's Gemini 2.5 Pro into your multi-agent web application, especially with a focus on batch mode, context caching, and large contexts, is a great step.
+
+Given your existing setup with OpenAI and DeepSeek, I'll provide a Python backend code proposal that focuses on integrating Gemini 2.5 Pro via Google Cloud's Vertex AI SDK. This approach allows for robust management of large contexts and leverages Google's infrastructure for batch processing and potential future caching mechanisms.
+
+Key Considerations for Gemini 2.5 Pro Integration:
+
+Vertex AI SDK: We'll use the google-cloud-aiplatform library, which is the official way to interact with Vertex AI services, including Gemini models.
+Authentication: Vertex AI typically uses service account authentication. For local development, you can set up gcloud to use your user credentials, or for deployment, you'd use a service account key.
+Project ID and Location: Vertex AI resources are tied to a GCP project and a specific region.
+Batch Mode: While the Vertex AI SDK doesn't have a direct "batch mode" for inference in the same way you might think of batch processing for data, it does support asynchronous operations and larger inputs. For truly large-scale batch processing, you'd typically orchestrate multiple requests or use Vertex AI's batch prediction jobs (which are more for fine-tuned models or large datasets, not direct API calls for conversational AI). For your use case, we'll focus on handling large contexts efficiently within a single request and discuss how to manage multiple such requests.
+Context Caching: Vertex AI offers context caching for Gemini models. This is a crucial feature for handling large contexts efficiently, as it allows you to store a portion of the prompt (the "context") and only send the new "query" part in subsequent requests, saving on token costs and latency.
+Large Contexts: Gemini 2.5 Pro supports a 1 million token context window, which we'll leverage by structuring the input appropriately.
+Python Backend Code Proposal for Gemini 2.5 Pro Integration
+Here's a Python code proposal for your llm_provider.py (or similar) file, along with necessary environment variable updates and a requirements.txt entry.
+
+1. Update your .env file:
+
+[SEE NEW CODE BELOW]
+
+
+2. requirements.txt :
+
+Add the Vertex AI SDK:
+
+google-cloud-aiplatform
+
+
+
+3. llm_provider.py (or similar backend module):
+
+[SEE NEW CODE BELOW]
+
+
+Explanation and Integration Notes:
+
+GeminiLLMProvider Class:
+Initialization ( __init__ ) : Sets up your GCP project ID, location, model name, and other parameters from environment variables. It initializes the aiplatform client.
+_create_generation_config : Helper to build the GenerationConfig for Gemini, controlling temperature, top_p, and max output tokens.
+_convert_messages_to_gemini_content : Adapts your existing message format (e.g., {"role": "user", "content": "..."} ) to Gemini's Content and Part objects. Gemini uses "model" for the assistant's role.
+_handle_large_context_with_caching : This is the core for large contexts.
+Initial Approach (Simulated Caching): For a first integration, the simplest way to handle a 1 million token context with Gemini 1.5 Pro is to pass the entire large_context_text as part of the initial user prompt. The model itself is designed to handle this large input window. This is what the provided code does by concatenating large_context_text and current_query .
+True Vertex AI CachedContent (Advanced): The comments in this function explain how you would use Vertex AI's explicit CachedContent feature. This involves:
+Making a separate API call to CachedContentService.CreateCachedContent to upload your large, static context once. This returns a resource name (e.g., projects/P/locations/L/cachedContents/C ).
+In subsequent GenerateContentRequest calls, you would reference this cached_content resource name instead of sending the full text again. This saves on input token costs for the cached part.
+You'd need a mechanism to manage these CachedContent resources (creation, deletion, TTL). I've included conceptual create_cached_content , get_cached_content_reference , and delete_cached_content methods to illustrate this, but their full implementation would involve more Vertex AI API calls.
+generate_content : This is your main function to interact with Gemini.
+It takes messages , tools , large_context_text , and full_context_id .
+It constructs the GenerateContentRequest object.
+It handles converting your tool definitions to Gemini's Tool and FunctionDeclaration format.
+It makes the API call using self.client.generate_content() .
+It parses the response, distinguishing between text responses and tool calls.
+Batch Mode (Conceptual):
+The generate_content function itself is a single API call. For "batch mode" with conversational AI, you typically mean processing multiple independent requests efficiently.
+The "Scenario 4: Batch-like Processing" in the if __name__ == "__main__": block demonstrates how you would iterate through a list of queries and call generate_content for each.
+For truly massive, asynchronous batch processing (e.g., processing millions of documents offline), Vertex AI offers BatchPredictionJob for models, but this is usually for fine-tuned models or specific data processing tasks, not direct conversational API calls. For your use case, simply parallelizing calls to generate_content (e.g., using asyncio or a thread pool) would be the most common "batch" approach.
+Tool Calling (Function Calling):
+Gemini 1.5 Pro supports function calling. The tools parameter in generate_content allows you to pass your tool definitions.
+The code includes logic to convert your tool definitions (assuming a format similar to OpenAI's) into Gemini's FunctionDeclaration and Tool objects.
+It also parses the response to identify if Gemini decided to call a tool, returning it in a tool_calls structure.
+Integration Steps for your Developers:
+
+Install Dependencies: Ensure google-cloud-aiplatform is installed.
+GCP Project Setup:
+Enable the Vertex AI API in your GCP project.
+Ensure the service account running your backend has the necessary permissions (e.g., Vertex AI User role).
+Set GCP_PROJECT_ID and GCP_LOCATION in your .env .
+Adapt llm_provider.py :
+Integrate the GeminiLLMProvider class into your existing LLM provider selection logic. You might have a factory function or a dictionary mapping LLM_PROVIDER names to provider instances.
+Ensure your messages format is consistent with what _convert_messages_to_gemini_content expects.
+Decide how you want to expose large_context_text and full_context_id through your application's API or internal calls.
+Context Caching Strategy:
+Simple (Current Code): The current code passes the large context with each request. This works for Gemini 1.5 Pro's large context window but doesn't leverage explicit server-side caching to save on token costs for repeated contexts.
+Advanced (Vertex AI CachedContent ): If you have truly static, very large contexts that are reused across many queries, implementing the CachedContent API calls (as hinted in the comments) would be beneficial. This would involve:
+A separate service or function to create/update CachedContent resources on Vertex AI.
+Storing the CachedContent resource names (e.g., in your PostgreSQL database, keyed by full_context_id ).
+Modifying generate_content to retrieve and use these resource names in the GenerateContentRequest.cached_content field.
+Managing the lifecycle (TTL, deletion) of these CachedContent resources.
+Error Handling and Retries: The example includes basic try-except . You'll want to implement more robust error handling and retry mechanisms, similar to what you likely have for OpenAI/DeepSeek.
+Streaming: If you need streaming responses, the generate_content method would need to be adapted to handle the streaming iterator returned by self.client.stream_generate_content() .
+This proposal provides a solid foundation for integrating Gemini 2.5 Pro with large contexts and function calling capabilities into your multi-agent application. The choice between simple context handling and explicit Vertex AI CachedContent depends on the specific reuse patterns and cost optimization goals for your large contexts.
+
+
+******************************************
+ON A SECOND ITERATION, I GOT SOME IMPROVEMENTS IN THE CODE.  HERE THEY ARE
+
+You're right to ask for clarification! My previous code snippet used gemini-1.5-pro-preview-0514 , which is a specific version of Gemini 1.5 Pro. While Gemini 2.5 isn't a publicly available model name in Vertex AI (the current public version is Gemini 1.5 Pro), the code is designed to be forward-compatible with future Gemini models that support large contexts and the Vertex AI SDK.
+
+The core of the code is already set up to work with Gemini 1.5 Pro, which offers the 1 million token context window you're looking for.
+
+Here's a breakdown of why the previous code is largely suitable and what minor adjustments or considerations you might have:
+
+Current Code's Compatibility with Gemini 1.5 Pro (1 Million Token Context)
+Model Name: The GEMINI_CHAT_MODEL environment variable is the key.
+gemini-1.5-pro-preview-0514 (used in the example) is an older preview version.
+You should update this to the latest stable public version of Gemini 1.5 Pro that supports the 1 million token context. As of my last update, this would typically be something like gemini-1.5-pro or a specific version like gemini-1.5-pro-001 . Always refer to the official Vertex AI documentation for the most current model names  and their capabilities.
+Large Context Handling: The _handle_large_context_with_caching function, even in its simplified form (where it combines the large context and query into a single prompt), correctly leverages Gemini 1.5 Pro's 1 million token context window. The model itself is capable of processing this large input.
+Vertex AI SDK: The google-cloud-aiplatform SDK is the correct and official way to interact with Gemini models on Vertex AI, regardless of the specific Gemini version (1.0, 1.5, or future 2.0+).
+Batch Mode: The "batch-like" processing demonstrated (looping through queries) is the practical approach for many applications. For true, large-scale offline batch processing, you'd look into Vertex AI's Batch Prediction, but that's a different use case than real-time chatbot interactions.
+Context Caching: The conceptual CachedContent management is crucial for cost optimization with very large, frequently reused contexts. The Vertex AI SDK supports this, but it requires more explicit API calls to manage the cached content resources themselves.
+Updated Code and Suggestions
+Let's refine the code slightly and add more explicit guidance.
+
+1. Updated .env suggestion:
+
+# ... existing .env variables ...
+
+# Google Gemini
+GCP_PROJECT_ID=your-gcp-project-id # Replace with your actual GCP Project ID
+GCP_LOCATION=us-central1           # Or your preferred region, e.g., europe-west1
+# IMPORTANT: Use the latest stable Gemini 1.5 Pro model name from Vertex AI documentation.
+# As of recent updates, 'gemini-1.5-pro' is the general alias, or a specific version like 'gemini-1.5-pro-001'
+GEMINI_CHAT_MODEL=gemini-1.5-pro
+GEMINI_CONTEXT_CACHE_TTL_SECONDS=3600 # Example TTL for context cache (1 hour)
+GEMINI_MAX_TOKENS=8192 # Max output tokens for Gemini. Adjust as needed. Max for 1.5 Pro is 8192.
+
+# Add 'gemini' to your LLM_PROVIDER options
+LLM_PROVIDER=openai,deepseek,gemini
+
+
+
+
+
+2. llm_provider.py (Minor Adjustments and Enhanced Comments):
+
+import os
+import json
+import time
+from typing import List, Dict, Any, Optional
+
+# Import necessary Google Cloud libraries
+from google.cloud import aiplatform
+from google.cloud.aiplatform_v1beta1.types import (
+    GenerateContentRequest,
+    GenerationConfig,
+    Content,
+    Part,
+    Tool,
+    ToolConfig,
+    FunctionDeclaration,
+    FunctionCall,
+    FunctionResponse,
+)
+from google.protobuf.json_format import MessageToDict, ParseDict
+from google.protobuf.struct_pb2 import Value # Required for parsing tool parameters
+
+# Assuming you have a base LLMProvider class or similar structure
+# If not, you can adapt this to your existing function calls.
+
+class GeminiLLMProvider:
+    def __init__(self):
+        self.project_id = os.getenv("GCP_PROJECT_ID")
+        self.location = os.getenv("GCP_LOCATION")
+        # Use the model name from environment, defaulting to a common 1.5 Pro alias
+        self.model_name = os.getenv("GEMINI_CHAT_MODEL", "gemini-1.5-pro")
+        self.temperature = float(os.getenv("CHAT_TEMPERATURE", 0.2))
+        self.max_output_tokens = int(os.getenv("GEMINI_MAX_TOKENS", 8192))
+        self.top_p = float(os.getenv("CHAT_TOP_P", 1.0))
+        self.context_cache_ttl_seconds = int(os.getenv("GEMINI_CONTEXT_CACHE_TTL_SECONDS", 3600))
+
+        if not self.project_id or not self.location:
+            raise ValueError("GCP_PROJECT_ID and GCP_LOCATION must be set in environment variables for Gemini.")
+
+        # Initialize Vertex AI client
+        # aiplatform.init() is for initializing the client for higher-level operations (e.g., model deployment)
+        # For direct prediction service calls, we use PredictionServiceClient.
+        self.client = aiplatform.gapic.PredictionServiceClient(
+            client_options={"api_endpoint": f"{self.location}-aiplatform.googleapis.com"}
+        )
+        # The full resource name for the model endpoint
+        self.endpoint = f"projects/{self.project_id}/locations/{self.location}/publishers/google/models/{self.model_name}"
+
+        # --- Internal cache for context caching (simple in-memory for demonstration) ---
+        # In a real production application, this would be a more persistent and robust cache
+        # (e.g., Redis, or a dedicated database table for CachedContent resource names).
+        # This dictionary stores: {full_context_id: {"resource_name": "...", "expires_at": timestamp}}
+        self._context_cache: Dict[str, Dict[str, Any]] = {}
+        # Initialize the CachedContentService client for explicit caching
+        self.cached_content_client = aiplatform.gapic.CachedContentServiceClient(
+            client_options={"api_endpoint": f"{self.location}-aiplatform.googleapis.com"}
+        )
+
+
+    def _create_generation_config(self) -> GenerationConfig:
+        """Creates a GenerationConfig object for Gemini."""
+        return GenerationConfig(
+            temperature=self.temperature,
+            top_p=self.top_p,
+            max_output_tokens=self.max_output_tokens,
+        )
+
+    def _convert_messages_to_gemini_content(self, messages: List[Dict[str, str]]) -> List[Content]:
+        """
+        Converts a list of messages (e.g., from OpenAI format) to Gemini Content objects.
+        Handles both user and assistant roles.
+        """
+        gemini_content = []
+        for msg in messages:
+            role = "user" if msg["role"] == "user" else "model" # Gemini uses 'model' for assistant
+            gemini_content.append(
+                Content(
+                    role=role,
+                    parts=[Part(text=msg["content"])]
+                )
+            )
+        return gemini_content
+
+    def _handle_large_context_with_caching(
+        self,
+        full_context_id: str,
+        large_context_text: str,
+        current_query_content: Content # Pass the actual Content object for the query
+    ) -> List[Content]:
+        """
+        Manages large contexts using Vertex AI's context caching feature.
+        This function attempts to use a pre-cached context if available and valid.
+        If not, it creates a new cached content resource.
+
+        Args:
+            full_context_id: A unique identifier for this large context (e.g., document ID).
+            large_context_text: The full text of the large context (e.g., a document).
+            current_query_content: The user's current query as a Gemini Content object.
+
+        Returns:
+            A list of Content objects ready for the Gemini API, potentially including a cached_content reference.
+        """
+        cached_info = self._context_cache.get(full_context_id)
+        cached_resource_name = None
+
+        if cached_info and cached_info["expires_at"] > time.time():
+            cached_resource_name = cached_info["resource_name"]
+            print(f"Using cached content for ID: {full_context_id}")
+        else:
+            print(f"Creating new cached content for ID: {full_context_id}")
+            # Create a new CachedContent resource
+            try:
+                # The content to be cached
+                cached_parts = [Part(text=large_context_text)]
+                cached_content_obj = Content(role="user", parts=cached_parts)
+
+                # Create the CachedContent resource
+                new_cached_content = aiplatform.gapic.CachedContent(
+                    display_name=f"cached-context-{full_context_id}",
+                    contents=[cached_content_obj],
+                    ttl_seconds=self.context_cache_ttl_seconds,
+                )
+                create_request = aiplatform.gapic.CreateCachedContentRequest(
+                    parent=f"projects/{self.project_id}/locations/{self.location}",
+                    cached_content=new_cached_content,
+                    cached_content_id=f"chat-context-{full_context_id.replace('_', '-')}" # Must be unique and valid ID
+                )
+                response = self.cached_content_client.create_cached_content(request=create_request)
+                cached_resource_name = response.name
+                self._context_cache[full_context_id] = {
+                    "resource_name": cached_resource_name,
+                    "expires_at": time.time() + self.context_cache_ttl_seconds
+                }
+                print(f"Cached content created: {cached_resource_name}")
+            except Exception as e:
+                print(f"Error creating cached content: {e}. Falling back to sending full context.")
+                # Fallback: if caching fails, send the full text in the current request
+                return [
+                    Content(role="user", parts=[Part(text=large_context_text)]),
+                    current_query_content
+                ]
+
+        # If cached content is successfully used/created, construct the request with it
+        return [
+            Content(role="user", parts=[Part(cached_content=cached_resource_name)]),
+            current_query_content
+        ]
+
+
+    def generate_content(
+        self,
+        messages: List[Dict[str, str]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        large_context_text: Optional[str] = None,
+        full_context_id: Optional[str] = None,
+        stream: bool = False, # Gemini supports streaming, but we'll focus on non-streaming for now
+        **kwargs # For any other model-specific parameters
+    ) -> Dict[str, Any]:
+        """
+        Generates content using Google Gemini 1.5 Pro (or future 2.5+).
+
+        Args:
+            messages: A list of message dictionaries, e.g., [{"role": "user", "content": "Hello"}]
+                      The last message is assumed to be the current query.
+            tools: Optional list of tool definitions for function calling.
+            large_context_text: Optional, a large block of text to be used as context.
+                                If provided, `full_context_id` should also be provided for caching.
+            full_context_id: Optional, a unique ID for the large_context_text for caching purposes.
+                             Required if `large_context_text` is provided.
+            stream: Whether to stream the response. (Not fully implemented for streaming in this example)
+            kwargs: Additional arguments for the generation config.
+
+        Returns:
+            A dictionary containing the model's response.
+        """
+        generation_config = self._create_generation_config()
+
+        # Separate the actual query from historical messages
+        # Assuming the last message is always the current user query
+        if not messages:
+            raise ValueError("Messages list cannot be empty.")
+
+        current_query_message = messages[-1]
+        history_messages = messages[:-1]
+
+        gemini_history_content = self._convert_messages_to_gemini_content(history_messages)
+        current_query_content = Content(role="user", parts=[Part(text=current_query_message["content"])])
+
+        final_contents_for_request: List[Content] = []
+
+        # Handle large context if provided
+        if large_context_text and full_context_id:
+            # This will attempt to use or create a CachedContent resource
+            final_contents_for_request.extend(
+                self._handle_large_context_with_caching(
+                    full_context_id=full_context_id,
+                    large_context_text=large_context_text,
+                    current_query_content=current_query_content
+                )
+            )
+            # Add history messages *before* the cached content and current query
+            # Gemini expects history to be interleaved.
+            # If cached content is used, the history should come before it.
+            # This part can be tricky with cached content and history.
+            # For simplicity, if cached_content is used, we assume it *replaces* the need
+            # for the large_context_text in the history, and the history is just chat history.
+            # If you want the history to also be part of the cached content, you'd cache
+            # the entire conversation prefix.
+            final_contents_for_request = gemini_history_content + final_contents_for_request
+        elif large_context_text and not full_context_id:
+            print("Warning: large_context_text provided without full_context_id. Caching will not be used.")
+            # If no caching ID, just append the large context as a user message
+            final_contents_for_request.extend(gemini_history_content)
+            final_contents_for_request.append(Content(role="user", parts=[Part(text=large_context_text)]))
+            final_contents_for_request.append(current_query_content)
+        else:
+            # No large context, just use history and current query
+            final_contents_for_request.extend(gemini_history_content)
+            final_contents_for_request.append(current_query_content)
+
+
+        # Convert tools to Gemini format if provided
+        gemini_tools = []
+        if tools:
+            for tool_def in tools:
+                # Ensure parameters are correctly parsed into a Value protobuf
+                parameters_value = ParseDict(tool_def["function"]["parameters"], Value())
+                function_declaration = FunctionDeclaration(
+                    name=tool_def["function"]["name"],
+                    description=tool_def["function"].get("description", ""),
+                    parameters=parameters_value
+                )
+                gemini_tools.append(Tool(function_declarations=[function_declaration]))
+
+        # Construct the request
+        request = GenerateContentRequest(
+            model=self.endpoint,
+            contents=final_contents_for_request,
+            generation_config=generation_config,
+            tools=gemini_tools if gemini_tools else None,
+            # tool_config=ToolConfig(function_calling_config=ToolConfig.FunctionCallingConfig(mode=ToolConfig.FunctionCallingConfig.Mode.AUTO)), # Example for auto function calling
+        )
+
+        try:
+            # For batch mode, you'd typically send multiple requests asynchronously
+            # or use Vertex AI's BatchPredictionJob for very large datasets.
+            # For a single request with large context, this is the standard call.
+            response = self.client.generate_content(request=request)
+
+            # Process the response
+            if response.candidates:
+                candidate = response.candidates[0]
+                if candidate.content and candidate.content.parts:
+                    # Check for function calls
+                    function_calls = []
+                    for part in candidate.content.parts:
+                        if part.function_call:
+                            # Convert FunctionCall protobuf to dict
+                            function_calls.append(MessageToDict(part.function_call))
+
+                    if function_calls:
+                        return {
+                            "role": "assistant",
+                            "content": "", # Content might be empty if it's purely a tool call
+                            "tool_calls": function_calls
+                        }
+                    else:
+                        # Assuming text response
+                        # Concatenate all text parts if there are multiple
+                        full_text_response = "".join([p.text for p in candidate.content.parts if p.text])
+                        return {
+                            "role": "assistant",
+                            "content": full_text_response,
+                        }
+            return {"role": "assistant", "content": "No response from Gemini."}
+
+        except Exception as e:
+            print(f"Error calling Gemini API: {e}")
+            return {"role": "assistant", "content": f"Error: {e}"}
+
+    def delete_cached_content(self, full_context_id: str):
+        """
+        Deletes a CachedContent resource from Vertex AI and from the internal cache.
+        Call this when a large context is no longer needed to free up resources.
+        """
+        cached_info = self._context_cache.pop(full_context_id, None)
+        if cached_info:
+            resource_name = cached_info["resource_name"]
+            print(f"Deleting CachedContent resource: {resource_name}")
+            try:
+                self.cached_content_client.delete_cached_content(name=resource_name)
+                print(f"Successfully deleted cached content for ID: {full_context_id}")
+            except Exception as e:
+                print(f"Error deleting cached content {resource_name}: {e}")
+        else:
+            print(f"No cached content found for ID: {full_context_id} to delete.")
+
+
+# Example usage (assuming this is integrated into your main application logic)
+if __name__ == "__main__":
+    # Set dummy environment variables for testing
+    os.environ["GCP_PROJECT_ID"] = "your-gcp-project-id" # Replace with your project ID
+    os.environ["GCP_LOCATION"] = "us-central1"
+    os.environ["GEMINI_CHAT_MODEL"] = "gemini-1.5-pro" # Updated to general 1.5 Pro alias
+    os.environ["CHAT_TEMPERATURE"] = "0.2"
+    os.environ["GEMINI_MAX_TOKENS"] = "8192"
+    os.environ["CHAT_TOP_P"] = "1.0"
+    os.environ["GEMINI_CONTEXT_CACHE_TTL_SECONDS"] = "3600" # 1 hour TTL
+
+    gemini_provider = GeminiLLMProvider()
+
+    # Scenario 1: Simple chat
+    print("--- Simple Chat ---")
+    response = gemini_provider.generate_content(
+        messages=[{"role": "user", "content": "Hello, how are you today?"}]
+    )
+    print(response)
+
+    # Scenario 2: Large context with explicit caching (demonstrates the feature)
+    print("\n--- Large Context with Explicit Caching ---")
+    # Simulate a very long document (e.g., from your RAG system)
+    long_document = "This is a very long document about the history of artificial intelligence. It covers topics from early philosophical ideas to modern neural networks. The document is designed to be extensive and provide a comprehensive overview of the field. It discusses Turing's contributions, the Dartmouth workshop, expert systems, the AI winter, machine learning, deep learning, and the rise of large language models. The document could easily be 500,000 tokens long if fully fleshed out. " * 100
+    query_with_large_context = "Summarize the key milestones in the history of AI mentioned in the document."
+    context_id = "ai-history-doc-123" # Unique ID for this specific large document
+
+    # First call: will create cached content
+    response_cached_1 = gemini_provider.generate_content(
+        messages=[{"role": "user", "content": query_with_large_context}],
+        large_context_text=long_document,
+        full_context_id=context_id
+    )
+    print("Response with cached content (first call):", response_cached_1)
+
+    # Second call with the same context_id: will reuse cached content (if within TTL)
+    query_follow_up = "What were the main challenges during the AI winter period?"
+    response_cached_2 = gemini_provider.generate_content(
+        messages=[{"role": "user", "content": query_follow_up}],
+        large_context_text=long_document, # Still provide the text, but the function will use cache
+        full_context_id=context_id
+    )
+    print("Response with cached content (second call):", response_cached_2)
+
+    # Clean up cached content (important for cost management)
+    gemini_provider.delete_cached_content(context_id)
+
+
+    # Scenario 3: Function Calling
+    print("\n--- Function Calling ---")
+    tools_example = [
+        {
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                            "description": "The unit of temperature to return",
+                        },
+                    },
+                    "required": ["location"],
+                },
+            }
+        }
+    ]
+    response_tool_call = gemini_provider.generate_content(
+        messages=[{"role": "user", "content": "What's the weather like in Boston?"}],
+        tools=tools_example
+    )
+    print(response_tool_call)
+
+    # Scenario 4: Batch-like Processing (multiple requests)
+    print("\n--- Batch-like Processing (Multiple Requests) ---")
+    queries_for_batch = [
+        "What is the capital of France?",
+        "Who wrote 'Romeo and Juliet'?",
+        "What is the square root of 144?"
+    ]
+    results = []
+    for q in queries_for_batch:
+        res = gemini_provider.generate_content(messages=[{"role": "user", "content": q}])
+        results.append(res)
+    print(results)
+
+
+Key Changes and Enhancements:
+Model Name Update: Changed GEMINI_CHAT_MODEL default to gemini-1.5-pro . This is the general alias for the latest stable Gemini 1.5 Pro model, which supports the 1 million token context.
+Explicit CachedContent Management:
+Added self.cached_content_client = aiplatform.gapic.CachedContentServiceClient(...) to initialize the client specifically for managing cached content resources.
+The _handle_large_context_with_caching function now attempts to create and reuse actual Vertex AI CachedContent resources .
+It checks an internal _context_cache (which should be replaced by a persistent store like Redis in production) to see if a CachedContent resource already exists and is not expired for the given full_context_id .
+If not found or expired, it calls self.cached_content_client.create_cached_content to create a new CachedContent resource on Vertex AI.
+It then constructs the GenerateContentRequest to reference this cached_content resource name.
+Added a delete_cached_content method to allow you to explicitly remove cached content resources when they are no longer needed, which is crucial for cost management.
+Message Structure for Caching: When using cached_content , the GenerateContentRequest expects the cached content to be a Part within a Content object, separate from the current_query . The _handle_large_context_with_caching function now returns the correct structure.
+Tool Parameter Parsing: Ensured that tool parameters are correctly parsed into google.protobuf.struct_pb2.Value() which is required by the Vertex AI SDK for FunctionDeclaration parameters.
+Robust Response Parsing: Improved the parsing of the model's response to handle multiple text parts and correctly extract function calls.
+Error Handling: Added more specific error handling around CachedContent creation.
+Example Usage: The if __name__ == "__main__": block now explicitly demonstrates the lifecycle of creating, reusing, and deleting cached content.
+Important Considerations for Your Developers:
+Persistent Cache for _context_cache : The _context_cache dictionary in this example is in-memory and will reset with each application restart. For production, you MUST replace this with a persistent store (e.g., Redis, a database table) to store the CachedContent resource names and their expiration times. This is vital for the caching to be effective across requests and application restarts.
+CachedContent Lifecycle Management:
+Creation: Create CachedContent when a large document is first introduced and likely to be queried repeatedly.
+Expiration ( ttl_seconds ): Set an appropriate ttl_seconds for your CachedContent based on how long the context remains relevant.
+Deletion: Implement logic to explicitly call delete_cached_content when a document is no longer needed or updated, to avoid incurring costs for unused cached content.
+Authentication: For production deployments, ensure your backend service (e.g., Cloud Run, GCE) has a service account attached with the Vertex AI User role (or a more granular role if preferred) to access the Gemini API and manage CachedContent resources.
+Cost Management: While CachedContent reduces token costs for repeated contexts, there are still costs associated with storing the cached content itself. Monitor your Vertex AI billing closely.
+Model Versioning: Always check the official Vertex AI documentation  for the latest stable model names and their capabilities. gemini-1.5-pro is a good general alias, but specific versions might be preferred for stability in production.
+Streaming: If your frontend requires streaming responses, you'll need to modify the generate_content method to use self.client.stream_generate_content(request=request) and iterate over the chunks.
+This revised code provides a more complete and robust integration for Gemini 1.5 Pro, including the explicit context caching feature, which is essential for optimizing costs and performance with large contexts.
+

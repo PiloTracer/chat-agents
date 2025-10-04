@@ -45,6 +45,15 @@ services:
       DEEPSEEK_API_BASE: ${DEEPSEEK_API_BASE:-https://api.deepseek.com/v1}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-no_api_key_available}
       DEEPSEEK_CHAT_MODEL: ${DEEPSEEK_CHAT_MODEL:-deepseek-chat}
+      # Gemini API (Google Generative Language API)
+      GEMINI_API_BASE: ${GEMINI_API_BASE:-https://generativelanguage.googleapis.com/v1beta}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-1.5-pro}
+      GEMINI_ENABLE_CONTEXT_CACHE: ${GEMINI_ENABLE_CONTEXT_CACHE:-true}
+      GEMINI_CACHE_TTL_SECONDS: ${GEMINI_CACHE_TTL_SECONDS:-1800}
+      GEMINI_CACHE_MIN_CHARS: ${GEMINI_CACHE_MIN_CHARS:-4000}
+      GEMINI_MAX_TOKENS: ${GEMINI_MAX_TOKENS:-8192}
+      GCP_LOCATION: ${GCP_LOCATION:-us-central1}
       API_KEY: ${API_KEY:-replace_me}
       AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-change-me}
       AUTH_TOKEN_TTL_SECONDS: ${AUTH_TOKEN_TTL_SECONDS:-86400}

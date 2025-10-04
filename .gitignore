@@ -99,3 +99,6 @@ yarn-error.log*
 
 dbdata/
 "@ | Out-File -Encoding UTF8 .gitignore
+
+# other
+/samples

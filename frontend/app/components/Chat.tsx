@@ -104,6 +104,7 @@ export default function Chat({ apiBase, token }: ChatProps) {
           <select value={llm} onChange={(e)=>setLlm(e.target.value)} style={{ minWidth: 140 }}>
             <option value="gpt">GPT</option>
             <option value="deepseek">DeepSeek</option>
+            <option value="gemini">Gemini</option>
           </select>
         </label>
         <label style={{ display: "flex", gap: 8 }}>

@@ -1,0 +1,262 @@
+Okay, I've reviewed your code, focusing on the Gemini integration and the error "LLM request failed: too many values to unpack (expected 2)".
+
+Let's break down the issue and then address the context caching, batch mode, and large context handling from Gemini's perspective.
+
+The "too many values to unpack (expected 2)" Error
+
+This error is occurring in your llm_provider.py within the _gemini_convert_messages function.
+
+The Problem:
+
+The line sys_instr_text, context_text, base_contents = self._gemini_convert_messages(messages) is attempting to unpack the result of _gemini_convert_messages into three variables. However, if we look at the _gemini_convert_messages function signature and its return statement, it actually returns a Tuple[Optional[str], Optional[str], List[dict]]. This is indeed three values.
+
+However, further down in the _call_gemini method, you have this line:
+system_text, contents = self._gemini_convert_messages(messages)
+This line is expecting two values, but _gemini_convert_messages returns three. This is the source of your "too many values to unpack" error.
+
+Proposed Fix:
+
+In your _call_gemini method, replace:
+
+code
+Python
+download
+content_copy
+expand_less
+system_text, contents = self._gemini_convert_messages(messages)
+
+with:
+
+code
+Python
+download
+content_copy
+expand_less
+system_text, context_text, contents = self._gemini_convert_messages(messages)
+
+This will correctly unpack the three values returned by _gemini_convert_messages. You've correctly used the sys_instr_text, context_text, base_contents unpack a few lines below, so it seems like an inconsistency during refactoring.
+
+Now, let's address the Gemini integration features you highlighted:
+
+Gemini Integration Review and Recommendations
+
+You've made good progress on the Gemini integration, especially with the cachedContents and system instruction handling.
+
+1. Context/Knowledge Base Provisioning to Gemini
+
+Current Approach:
+Your _gemini_convert_messages function intelligently separates the system prompt, extracts a potential "Context:" section, and then _call_gemini attempts to use cachedContents for the context_text if enabled and the text is large enough. If caching fails or is disabled, it sends the context_text directly as a user content part.
+
+Gemini's Perspective:
+This is generally a very good approach! Gemini's systemInstruction is ideal for core persona and general rules, while cachedContents (or large user content parts) is excellent for dynamic, large knowledge base chunks.
+
+Recommendations/Refinements:
+
+System Instruction vs. Context: You're correctly separating the fixed "You are {role}." and "Guidelines:" from the dynamic "Context:". Gemini's systemInstruction is designed for the former. The RAG context itself should ideally be in contents parts. Your current parsing and splitting within _gemini_convert_messages does a good job of this.
+
+Structured Content (Future Enhancement): While your current text-based context is fine, for very complex RAG scenarios, Gemini also supports "structured content" (e.g., JSON parts). This is an advanced topic but could be useful if your documents contain highly structured data that could be passed directly rather than flattened into text. For now, your text approach is standard and effective.
+
+"Every factual statement must reference its supporting source as [#].": This guideline is still within the systemInstruction after parsing out the Context. This is where it belongs, as it's a core instruction for how the model should respond.
+
+Turn-Based Conversation (Implicit): Gemini's API expects messages in a turn-based format (user, model, user, model). Your _gemini_convert_messages effectively flattens system messages into a single system instruction and adds all user/model turns to the contents list. This is correct for how Gemini handles it.
+
+2. Context Caching (cachedContents)
+
+Current Approach:
+You've implemented _gemini_get_or_create_cached which creates a CachedContent resource and stores its name and expiry in an in-memory cache (_gemini_cache). When enabled, this resource is referenced in the contents of the generateContent call.
+
+Gemini's Perspective:
+This is an excellent use of Gemini's cachedContents feature, which is specifically designed for large, frequently used contexts like those in RAG. It reduces token usage and can potentially improve latency for repeated queries against the same context.
+
+Recommendations/Refinements:
+
+Error Handling: Your current implementation logs a warning if cachedContents creation fails and falls back to sending the full text. This is a robust fallback.
+
+Cache Invalidation: Your in-memory cache uses a TTL. Ensure that if documents are updated or deleted, their corresponding cached content resources are also invalidated or recreated. Your current system will naturally re-hash the content if it changes, leading to a new cached content resource, which is good. For deletion, you might consider an explicit cleanup step if cachedContents resources start to accumulate unnecessarily.
+
+Gemini Project Setup: Remind the user that cachedContents might require specific IAM permissions or project configurations on the Google Cloud side. The 403 or 400 errors for cachedContents usually mean the project doesn't have the feature enabled or the service account lacks permission.
+
+3. Batch Mode (chat_completion_batch)
+
+Current Approach:
+You've implemented chat_completion_batch as a sequential loop calling chat_completion for each item.
+
+Gemini's Perspective:
+This is a standard way to implement batch processing when the underlying API doesn't offer a native batch endpoint for chat completions (which, for generateContent, it generally doesn't).
+
+Recommendations/Refinements:
+
+Asynchronous Parallelism: For true performance gains in batch mode, you could use asyncio.gather to run multiple _call_provider (or chat_completion) calls concurrently instead of sequentially. This would make much better use of httpx.AsyncClient.
+
+Here's a conceptual change for chat_completion_batch:
+
+code
+Python
+download
+content_copy
+expand_less
+async def chat_completion_batch(
+    self,
+    batches: List[List[Dict[str, str]]],
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+) -> List[Dict[str, str]]:
+    tasks = []
+    for msgs in batches:
+        tasks.append(
+            self.chat_completion(
+                messages=msgs,
+                provider=provider,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                retries=getattr(settings, "CHAT_MAX_RETRIES", 2),
+            )
+        )
+    results = await asyncio.gather(*tasks, return_exceptions=True) # return_exceptions to handle individual task failures
+    final_results: List[Dict[str, str]] = []
+    for res in results:
+        if isinstance(res, Exception):
+            logger.error("A batch chat completion task failed: %s", res)
+            # You might return a default error message or skip this result
+            final_results.append({"content": f"Error: {res}", "provider": provider or "unknown", "model": model or "unknown"})
+        else:
+            final_results.append(res)
+    return final_results
+4. Large Context Handling
+
+Current Approach:
+You handle large contexts through:
+
+Chunking in rag.py: chunk_text breaks documents into manageable pieces.
+
+Retrieval in chat.py: search_chunks finds relevant chunks.
+
+Context Assembly in chat.py: Relevant chunks are combined, with optional extension for adjacent pages.
+
+cachedContents in llm_provider.py: For Gemini, this offloads the large context.
+
+Truncation on Retry in llm_provider.py (_call_gemini): If a MAX_TOKENS error occurs, you halve the maxOutputTokens and truncate the sys_text_for_attempt (which includes context if not cached).
+
+Gemini's Perspective:
+This is a very good multi-layered strategy for large context. Gemini 1.5 Pro has a massive context window (1 million tokens), but even with that, it's efficient to use RAG to provide relevant context, not just all context. Your chunking and retrieval ensure this. cachedContents further optimizes this. The truncation retry is a good defensive mechanism.
+
+Recommendations/Refinements:
+
+Context Prioritization: Your _gemini_convert_messages extracts the "Context:" section into context_text. This is then passed as a user part, which is correct for external knowledge. Keep the actual systemInstruction for immutable rules.
+
+Error Message Parsing for Truncation: You're correctly checking for finish == "MAX_TOKENS" in Gemini's response. This is the official signal for content length limits.
+
+System Truncation Logic: Your truncation logic within _call_gemini (halving maxOutputTokens and truncating context_text or sys_text_for_attempt) is a sound heuristic for retrying.
+
+Summary of Changes
+
+Critical Fix for "too many values to unpack":
+In app/llm_provider.py, inside _call_gemini, change:
+
+code
+Python
+download
+content_copy
+expand_less
+system_text, contents = self._gemini_convert_messages(messages)
+
+to:
+
+code
+Python
+download
+content_copy
+expand_less
+sys_instr_text, context_text, base_contents = self._gemini_convert_messages(messages)
+
+You will also need to adjust the variables in the while attempt < 2: loop to consistently use sys_instr_text, context_text, and base_contents as you have in the correct unpacking line below it. Specifically, the line local_contents = list(base_contents) is correct, but ensure that sys_text_for_attempt and context_text are derived from the three-way unpack.
+
+It looks like you have a copy-paste error or a slight mismatch in variable names. The variable contents used in the initial unpack system_text, contents = ... is then used within the loop (payload: dict = {"contents": local_contents}).
+
+Let's refine the _call_gemini method to be consistent:
+
+code
+Python
+download
+content_copy
+expand_less
+async def _call_gemini(
+    self,
+    base_url: str,
+    api_key: str,
+    messages: List[Dict[str, str]],
+    model: str,
+    temperature: Optional[float],
+    max_tokens: Optional[int],
+) -> tuple[str, str]:
+    model_path = self._gemini_model_path(model)
+    # Use a consistent unpack here
+    initial_system_text, initial_context_text, initial_contents = self._gemini_convert_messages(messages)
+
+    gen_cfg: dict = {"responseMimeType": "text/plain"}
+    if temperature is not None:
+        gen_cfg["temperature"] = float(temperature)
+    # ... (rest of gen_cfg logic remains the same) ...
+
+    async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
+        attempt = 0
+        # These variables will be modified during retry
+        sys_text_for_attempt = initial_system_text
+        context_text_for_attempt = initial_context_text
+        cfg_for_attempt = dict(gen_cfg)
+
+        while attempt < 2:
+            system_instruction: Optional[dict] = None
+            local_contents = list(initial_contents) # Start with base user/model messages
+
+            # Attach large retrieved context as user content (prefer cached reference)
+            if context_text_for_attempt:
+                if getattr(settings, "GEMINI_ENABLE_CONTEXT_CACHE", True) and attempt == 0:
+                    cached_name = await self._gemini_get_or_create_cached(client, base_url, api_key, context_text_for_attempt)
+                    if cached_name:
+                        local_contents = [{"role": "user", "parts": [{"cachedContent": cached_name}]}] + local_contents
+                    else:
+                        local_contents = [{"role": "user", "parts": [{"text": context_text_for_attempt}]}] + local_contents
+                else:
+                    # Fallback: send directly if caching is off or failed
+                    local_contents = [{"role": "user", "parts": [{"text": context_text_for_attempt}]}] + local_contents
+
+            if sys_text_for_attempt:
+                system_instruction = {"parts": [{"text": sys_text_for_attempt}]}
+
+            url = f"{base_url}/{model_path}:generateContent?key={api_key}"
+            payload: dict = {"contents": local_contents}
+            if system_instruction is not None:
+                payload["systemInstruction"] = system_instruction
+            if cfg_for_attempt:
+                payload["generationConfig"] = cfg_for_attempt
+
+            # ... (rest of the API call and response parsing logic remains the same) ...
+
+            # Retry strategy on MAX_TOKENS: shrink output, truncate system/context
+            if finish == "MAX_TOKENS" and attempt == 0:
+                try:
+                    # reduce maxOutputTokens by half, floor 256
+                    current_max = int(cfg_for_attempt.get("maxOutputTokens", 1024))
+                    cfg_for_attempt["maxOutputTokens"] = max(256, current_max // 2)
+                except Exception:
+                    cfg_for_attempt["maxOutputTokens"] = 512
+                try:
+                    limit = int(getattr(settings, "GEMINI_TRUNCATE_SYSTEM_CHARS", 60000))
+                    # Prefer truncating the context payload first
+                    if isinstance(context_text_for_attempt, str) and len(context_text_for_attempt) > limit:
+                        context_text_for_attempt = context_text_for_attempt[:limit] + "\n\n[... truncated for length ...]"
+                    elif isinstance(sys_text_for_attempt, str) and len(sys_text_for_attempt) > limit:
+                        sys_text_for_attempt = sys_text_for_attempt[:limit] + "\n\n[... truncated for length ...]"
+                except Exception:
+                    pass
+                attempt += 1
+                continue
+            # ... (rest of the loop and error handling) ...
+
+Consider asyncio.gather for chat_completion_batch to enable parallel execution if needed for performance.
+
+With these changes, your Gemini integration should be more robust and correctly handle the message unpacking, leveraging the caching and large context capabilities effectively.

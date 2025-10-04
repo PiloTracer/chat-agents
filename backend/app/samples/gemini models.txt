@@ -1,0 +1,66 @@
+Available Gemini models (ListModels):
+  - models/aqa | (Model that performs Attributed Question Answering.) | methods=generateAnswer | in=7168 | out=1024
+  - models/embedding-001 | (Embedding 001) | methods=embedContent | in=2048 | out=1
+  - models/embedding-gecko-001 | (Embedding Gecko) | methods=embedText,countTextTokens | in=1024 | out=1
+  - models/gemini-2.0-flash | (Gemini 2.0 Flash) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=8192
+  - models/gemini-2.0-flash-001 | (Gemini 2.0 Flash 001) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=8192
+  - models/gemini-2.0-flash-exp | (Gemini 2.0 Flash Experimental) | methods=generateContent,countTokens,bidiGenerateContent | in=1048576 | out=8192
+  - models/gemini-2.0-flash-exp-image-generation | (Gemini 2.0 Flash (Image Generation) Experimental) | methods=generateContent,countTokens,bidiGenerateContent | in=1048576 | out=8192
+  - models/gemini-2.0-flash-lite | (Gemini 2.0 Flash-Lite) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=8192
+  - models/gemini-2.0-flash-lite-001 | (Gemini 2.0 Flash-Lite 001) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=8192
+  - models/gemini-2.0-flash-lite-preview | (Gemini 2.0 Flash-Lite Preview) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=8192
+  - models/gemini-2.0-flash-lite-preview-02-05 | (Gemini 2.0 Flash-Lite Preview 02-05) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=8192
+  - models/gemini-2.0-flash-live-001 | (Gemini 2.0 Flash 001) | methods=bidiGenerateContent,countTokens | in=131072 | out=8192
+  - models/gemini-2.0-flash-preview-image-generation | (Gemini 2.0 Flash Preview Image Generation) | methods=generateContent,countTokens,batchGenerateContent | in=32768 | out=8192
+  - models/gemini-2.0-flash-thinking-exp | (Gemini 2.5 Flash Preview 05-20) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.0-flash-thinking-exp-01-21 | (Gemini 2.5 Flash Preview 05-20) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.0-flash-thinking-exp-1219 | (Gemini 2.5 Flash Preview 05-20) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.0-pro-exp | (Gemini 2.0 Pro Experimental) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.0-pro-exp-02-05 | (Gemini 2.0 Pro Experimental 02-05) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.5-flash | (Gemini 2.5 Flash) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.5-flash-exp-native-audio-thinking-dialog | (Gemini 2.5 Flash Exp Native Audio Thinking Dialog) | methods=countTokens,bidiGenerateContent | in=131072 | out=8192
+  - models/gemini-2.5-flash-image | (Nano Banana) | methods=generateContent,countTokens | in=32768 | out=8192
+  - models/gemini-2.5-flash-image-preview | (Nano Banana) | methods=generateContent,countTokens | in=32768 | out=8192
+  - models/gemini-2.5-flash-lite | (Gemini 2.5 Flash-Lite) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.5-flash-lite-preview-06-17 | (Gemini 2.5 Flash-Lite Preview 06-17) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.5-flash-lite-preview-09-2025 | (Gemini 2.5 Flash-Lite Preview Sep 2025) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.5-flash-live-preview | (Gemini 2.5 Flash Live Preview) | methods=bidiGenerateContent,countTokens | in=1048576 | out=65536
+  - models/gemini-2.5-flash-native-audio-latest | (Gemini 2.5 Flash Native Audio Latest) | methods=countTokens,bidiGenerateContent | in=131072 | out=8192
+  - models/gemini-2.5-flash-native-audio-preview-09-2025 | (Gemini 2.5 Flash Native Audio Preview 09-2025) | methods=countTokens,bidiGenerateContent | in=131072 | out=8192
+  - models/gemini-2.5-flash-preview-05-20 | (Gemini 2.5 Flash Preview 05-20) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.5-flash-preview-09-2025 | (Gemini 2.5 Flash Preview Sep 2025) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.5-flash-preview-native-audio-dialog | (Gemini 2.5 Flash Preview Native Audio Dialog) | methods=countTokens,bidiGenerateContent | in=131072 | out=8192
+  - models/gemini-2.5-flash-preview-tts | (Gemini 2.5 Flash Preview TTS) | methods=countTokens,generateContent | in=8192 | out=16384
+  - models/gemini-2.5-pro | (Gemini 2.5 Pro) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.5-pro-preview-03-25 | (Gemini 2.5 Pro Preview 03-25) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.5-pro-preview-05-06 | (Gemini 2.5 Pro Preview 05-06) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.5-pro-preview-06-05 | (Gemini 2.5 Pro Preview) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-2.5-pro-preview-tts | (Gemini 2.5 Pro Preview TTS) | methods=countTokens,generateContent | in=8192 | out=16384
+  - models/gemini-embedding-001 | (Gemini Embedding 001) | methods=embedContent,countTextTokens,countTokens,asyncBatchEmbedContent | in=2048 | out=1
+  - models/gemini-embedding-exp | (Gemini Embedding Experimental) | methods=embedContent,countTextTokens,countTokens | in=8192 | out=1
+  - models/gemini-embedding-exp-03-07 | (Gemini Embedding Experimental 03-07) | methods=embedContent,countTextTokens,countTokens | in=8192 | out=1
+  - models/gemini-exp-1206 | (Gemini Experimental 1206) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-flash-latest | (Gemini Flash Latest) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-flash-lite-latest | (Gemini Flash-Lite Latest) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-live-2.5-flash-preview | (Gemini Live 2.5 Flash Preview) | methods=bidiGenerateContent,countTokens | in=1048576 | out=65536
+  - models/gemini-pro-latest | (Gemini Pro Latest) | methods=generateContent,countTokens,createCachedContent,batchGenerateContent | in=1048576 | out=65536
+  - models/gemini-robotics-er-1.5-preview | (Gemini Robotics-ER 1.5 Preview) | methods=generateContent,countTokens | in=1048576 | out=65536
+  - models/gemma-3-12b-it | (Gemma 3 12B) | methods=generateContent,countTokens | in=32768 | out=8192
+  - models/gemma-3-1b-it | (Gemma 3 1B) | methods=generateContent,countTokens | in=32768 | out=8192
+  - models/gemma-3-27b-it | (Gemma 3 27B) | methods=generateContent,countTokens | in=131072 | out=8192
+  - models/gemma-3-4b-it | (Gemma 3 4B) | methods=generateContent,countTokens | in=32768 | out=8192
+  - models/gemma-3n-e2b-it | (Gemma 3n E2B) | methods=generateContent,countTokens | in=8192 | out=2048
+  - models/gemma-3n-e4b-it | (Gemma 3n E4B) | methods=generateContent,countTokens | in=8192 | out=2048
+  - models/imagen-3.0-generate-002 | (Imagen 3.0) | methods=predict | in=480 | out=8192
+  - models/imagen-4.0-fast-generate-001 | (Imagen 4 Fast) | methods=predict | in=480 | out=8192
+  - models/imagen-4.0-generate-001 | (Imagen 4) | methods=predict | in=480 | out=8192
+  - models/imagen-4.0-generate-preview-06-06 | (Imagen 4 (Preview)) | methods=predict | in=480 | out=8192
+  - models/imagen-4.0-ultra-generate-001 | (Imagen 4 Ultra) | methods=predict | in=480 | out=8192
+  - models/imagen-4.0-ultra-generate-preview-06-06 | (Imagen 4 Ultra (Preview)) | methods=predict | in=480 | out=8192
+  - models/learnlm-2.0-flash-experimental | (LearnLM 2.0 Flash Experimental) | methods=generateContent,countTokens | in=1048576 | out=32768
+  - models/text-embedding-004 | (Text Embedding 004) | methods=embedContent | in=2048 | out=1
+  - models/veo-2.0-generate-001 | (Veo 2) | methods=predictLongRunning | in=480 | out=8192
+  - models/veo-3.0-fast-generate-001 | (Veo 3 fast) | methods=predictLongRunning | in=480 | out=8192
+  - models/veo-3.0-fast-generate-preview | (Veo 3 fast) | methods=predictLongRunning | in=480 | out=8192
+  - models/veo-3.0-generate-001 | (Veo 3) | methods=predictLongRunning | in=480 | out=8192
+  - models/veo-3.0-generate-preview | (Veo 3) | methods=predictLongRunning | in=480 | out=8192

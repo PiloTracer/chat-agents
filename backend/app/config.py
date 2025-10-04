@@ -35,6 +35,17 @@ class Settings:
     DEEPSEEK_CHAT_MODEL = os.getenv("DEEPSEEK_CHAT_MODEL", "deepseek-chat")
     DEEPSEEK_EMBEDDING_MODEL = os.getenv("DEEPSEEK_EMBEDDING_MODEL", "deepseek-embedder")
     ENABLE_PROVIDER_FALLBACK = os.getenv("ENABLE_PROVIDER_FALLBACK", "true").lower() in {"1","true","yes"}
+    # Gemini provider
+    GEMINI_API_BASE = os.getenv("GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-1.5-pro")
+    GEMINI_ENABLE_CONTEXT_CACHE = os.getenv("GEMINI_ENABLE_CONTEXT_CACHE", "true").lower() in {"1", "true", "yes"}
+    GEMINI_CACHE_TTL_SECONDS = int(os.getenv("GEMINI_CACHE_TTL_SECONDS", "1800"))
+    GEMINI_CACHE_MIN_CHARS = int(os.getenv("GEMINI_CACHE_MIN_CHARS", "4000"))
+    # Cap for Gemini max output tokens per request
+    GEMINI_MAX_TOKENS = int(os.getenv("GEMINI_MAX_TOKENS", "8192"))
+    # Soft limit for system/context chars when retrying after MAX_TOKENS
+    GEMINI_TRUNCATE_SYSTEM_CHARS = int(os.getenv("GEMINI_TRUNCATE_SYSTEM_CHARS", "60000"))
 
     MAX_CHUNK_CHARS = int(os.getenv("MAX_CHUNK_CHARS", os.getenv("MAX_CHUNK_TOKENS", "1100")))
     CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "240"))
@@ -84,6 +95,8 @@ try:
         settings.OPENAI_API_KEY = settings.OPENAI_API_KEY.strip()
     if isinstance(settings.DEEPSEEK_API_KEY, str):
         settings.DEEPSEEK_API_KEY = settings.DEEPSEEK_API_KEY.strip()
+    if isinstance(settings.GEMINI_API_KEY, str):
+        settings.GEMINI_API_KEY = settings.GEMINI_API_KEY.strip()
 except Exception:
     pass
 
@@ -95,3 +108,11 @@ DEEPSEEK_API_KEY = settings.DEEPSEEK_API_KEY
 DEEPSEEK_CHAT_MODEL = settings.DEEPSEEK_CHAT_MODEL
 DEEPSEEK_EMBEDDING_MODEL = settings.DEEPSEEK_EMBEDDING_MODEL
 ENABLE_PROVIDER_FALLBACK = settings.ENABLE_PROVIDER_FALLBACK
+GEMINI_API_BASE = settings.GEMINI_API_BASE
+GEMINI_API_KEY = settings.GEMINI_API_KEY
+GEMINI_CHAT_MODEL = settings.GEMINI_CHAT_MODEL
+GEMINI_ENABLE_CONTEXT_CACHE = settings.GEMINI_ENABLE_CONTEXT_CACHE
+GEMINI_CACHE_TTL_SECONDS = settings.GEMINI_CACHE_TTL_SECONDS
+GEMINI_CACHE_MIN_CHARS = settings.GEMINI_CACHE_MIN_CHARS
+GEMINI_MAX_TOKENS = settings.GEMINI_MAX_TOKENS
+GEMINI_TRUNCATE_SYSTEM_CHARS = settings.GEMINI_TRUNCATE_SYSTEM_CHARS

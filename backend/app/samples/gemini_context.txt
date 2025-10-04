@@ -1,4 +1,4 @@
-﻿Okay, coding assistant, let's diagnose and fix this LLM request failed: gemini returned empty text (finish=MAX_TOKENS) error with gemini-flash-latest .
+Okay, coding assistant, let's diagnose and fix this LLM request failed: gemini returned empty text (finish=MAX_TOKENS) error with gemini-flash-latest .
 
 This error is a very strong indicator that the model is stopping its generation because it has hit the maximum output token limit you've set, before it could produce any meaningful text. The fact that a simple "give me a very short summary" worked, but "deme un corto resumen de la demanda" (which implies a context to summarize) failed, points to two main areas:
 
