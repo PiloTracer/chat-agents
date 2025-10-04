@@ -120,7 +120,12 @@ class LLMProvider:
                 return {"content": content, "provider": prov, "model": used_model}
             except Exception as e:
                 last_err = e
-                logger.warning("LLM call failed on %s: %s", prov, e)
+                # Log provider failures with robust context for diagnostics
+                try:
+                    emsg = str(e) if str(e) else repr(e)
+                except Exception:
+                    emsg = repr(e)
+                logger.warning("LLM call failed on %s: %s (%s)", prov, emsg, type(e).__name__)
 
         assert last_err is not None
         raise last_err
@@ -345,10 +350,14 @@ class LLMProvider:
 
     # ---------------- Vertex AI helpers ----------------
     def _vertex_endpoints(self, model: Optional[str]) -> Dict[str, str]:
-        location = getattr(settings, "VERTEX_LOCATION", "us-east1")
-        project = getattr(settings, "VERTEX_PROJECT_ID", "")
+        location = getattr(settings, "VERTEX_LOCATION", "us-east1").strip() or "us-east1"
+        project = getattr(settings, "VERTEX_PROJECT_ID", "").strip()
         publisher = getattr(settings, "VERTEX_PUBLISHER", "google")
-        model_name = model or getattr(settings, "VERTEX_CHAT_MODEL", "gemini-1.5-pro-002")
+        model_name = (model or getattr(settings, "VERTEX_CHAT_MODEL", "gemini-1.5-pro-002")).strip()
+        if not project:
+            raise RuntimeError(
+                "VERTEX_PROJECT_ID is not configured. Set VERTEX_PROJECT_ID to your GCP project ID in the backend environment."
+            )
         base = f"https://{location}-aiplatform.googleapis.com/v1"
         model_path = f"projects/{project}/locations/{location}/publishers/{publisher}/models/{model_name}"
         return {
@@ -403,7 +412,12 @@ class LLMProvider:
 
     async def _vertex_get_model_output_limit(self, client: httpx.AsyncClient, endpoints: Dict[str, str], token: str) -> Optional[int]:
         try:
-            resp = await client.get(endpoints["model"].replace(endpoints["base"] + "/", endpoints["base"] + "/"), headers={"Authorization": f"Bearer {token}"})
+            url = f"{endpoints['base']}/{endpoints['model']}"
+            project = endpoints["model"].split("/")[1] if "/" in endpoints["model"] else None
+            headers = {"Authorization": f"Bearer {token}"}
+            if project:
+                headers["x-goog-user-project"] = project
+            resp = await client.get(url, headers=headers)
             resp.raise_for_status()
             data = resp.json()
             lim = data.get("outputTokenLimit")
@@ -422,7 +436,11 @@ class LLMProvider:
             "contents": [{"role": "user", "parts": [{"text": text}]}],
         }
         try:
-            resp = await client.post(endpoints["cache"], headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload)
+            project = endpoints["model"].split("/")[1] if "/" in endpoints["model"] else None
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            if project:
+                headers["x-goog-user-project"] = project
+            resp = await client.post(endpoints["cache"], headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
             name = data.get("name")
@@ -432,7 +450,11 @@ class LLMProvider:
 
     async def _vertex_count_tokens(self, client: httpx.AsyncClient, endpoints: Dict[str, str], token: str, payload: Dict[str, object]) -> Optional[int]:
         try:
-            resp = await client.post(endpoints["count"], headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload)
+            project = endpoints["model"].split("/")[1] if "/" in endpoints["model"] else None
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            if project:
+                headers["x-goog-user-project"] = project
+            resp = await client.post(endpoints["count"], headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
             # totalTokens or usage metadata fields may exist
@@ -459,13 +481,19 @@ class LLMProvider:
         top_p = getattr(settings, "CHAT_TOP_P", None)
         if top_p is not None:
             gen_cfg["topP"] = float(top_p)
-        # Cap with VERTEX_MAX_TOKENS; exact value sized after countTokens
+        # Cap with VERTEX_CHAT_MAX_TOKENS (Vertex-specific), not global CHAT_MAX_TOKENS
         try:
-            cap = int(getattr(settings, "VERTEX_MAX_TOKENS", 8192))
+            cap = int(getattr(settings, "VERTEX_CHAT_MAX_TOKENS", getattr(settings, "VERTEX_MAX_TOKENS", 8192)))
         except Exception:
             cap = 8192
 
-        async with httpx.AsyncClient(timeout=settings.HTTP_TIMEOUT_SECONDS) as client:
+        # Larger timeout for Vertex to avoid ReadTimeout on long generations
+        try:
+            vtimeout = float(getattr(settings, "VERTEX_HTTP_TIMEOUT_SECONDS", max(60.0, float(settings.HTTP_TIMEOUT_SECONDS))))
+        except Exception:
+            vtimeout = max(60.0, float(settings.HTTP_TIMEOUT_SECONDS))
+        http_timeout = httpx.Timeout(timeout=vtimeout, connect=min(30.0, vtimeout), read=vtimeout, write=min(60.0, vtimeout), pool=min(30.0, vtimeout))
+        async with httpx.AsyncClient(timeout=http_timeout) as client:
             # Base payload for counting
             base_payload: Dict[str, object] = {"contents": list(initial_contents)}
             if initial_system_text:
@@ -475,16 +503,11 @@ class LLMProvider:
                 base_payload["contents"] = [{"role": "user", "parts": [{"text": initial_context_text}]}] + list(initial_contents)
 
             model_limit = await self._vertex_get_model_output_limit(client, endpoints, token)
-            # Count tokens may be useful for diagnostics, but outputTokenLimit is independent
-            # of input size; do not subtract input tokens from output cap.
-            _ = await self._vertex_count_tokens(client, endpoints, token, base_payload)
+            # Optionally call countTokens (disabled by default to reduce latency)
+            if getattr(settings, "VERTEX_ENABLE_COUNT_TOKENS", False):
+                _ = await self._vertex_count_tokens(client, endpoints, token, base_payload)
             effective_cap = min([v for v in [cap, model_limit] if isinstance(v, int) and v > 0] or [cap])
             available = max(256, effective_cap)
-            if max_tokens is not None:
-                try:
-                    available = max(1, min(available, int(max_tokens)))
-                except Exception:
-                    pass
             gen_cfg["maxOutputTokens"] = available
 
             # Attempt, with one retry on MAX_TOKENS
@@ -513,20 +536,40 @@ class LLMProvider:
                 if system_instruction is not None:
                     payload["systemInstruction"] = system_instruction
                 try:
-                    resp = await client.post(endpoints["gen"], headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload)
+                    # Include project header to aid quota attribution when required
+                    project = endpoints["model"].split("/")[1] if "/" in endpoints["model"] else None
+                    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+                    if project:
+                        headers["x-goog-user-project"] = project
+                    resp = await client.post(endpoints["gen"], headers=headers, json=payload)
                     resp.raise_for_status()
+                except httpx.TimeoutException as exc:
+                    raise RuntimeError(
+                        f"vertex request timed out after {int(vtimeout)}s calling '{endpoints['gen']}'. "
+                        f"Consider increasing VERTEX_HTTP_TIMEOUT_SECONDS or lowering max tokens."
+                    ) from exc
                 except httpx.HTTPStatusError as exc:
                     status = exc.response.status_code if exc.response is not None else "?"
                     detail = None
                     try:
                         errj = exc.response.json()
-                        detail = errj.get("error", {}).get("message") or errj.get("message") or str(errj)
+                        # Prefer rich Google error format when available
+                        if isinstance(errj, dict) and "error" in errj:
+                            gerr = errj.get("error") or {}
+                            msg = gerr.get("message") or ""
+                            status_txt = gerr.get("status") or ""
+                            code_num = gerr.get("code")
+                            detail = f"{msg} (status={status_txt}, code={code_num})"
+                        else:
+                            detail = errj.get("message") or str(errj)
                     except Exception:
                         try:
                             detail = exc.response.text
                         except Exception:
                             detail = str(exc)
-                    raise RuntimeError(f"vertex request failed ({status}) for model '{endpoints['model']}': {detail}") from exc
+                    raise RuntimeError(
+                        f"vertex request failed ({status}) for model '{endpoints['model']}': {detail}"
+                    ) from exc
 
                 data = resp.json()
                 # Extract text
@@ -563,8 +606,13 @@ class LLMProvider:
                             payload2: Dict[str, object] = {"contents": cont_contents, "generationConfig": cfg_for_attempt}
                             if system_instruction is not None:
                                 payload2["systemInstruction"] = system_instruction
-                            r2 = await client.post(endpoints["gen"], headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload2)
-                            r2.raise_for_status()
+                            try:
+                                r2 = await client.post(endpoints["gen"], headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload2)
+                                r2.raise_for_status()
+                            except httpx.TimeoutException as exc:
+                                raise RuntimeError(
+                                    f"vertex request timed out after {int(vtimeout)}s during continuation calling '{endpoints['gen']}'."
+                                ) from exc
                             d2 = r2.json()
                             try:
                                 cand2 = (d2.get("candidates") or [{}])[0] or {}

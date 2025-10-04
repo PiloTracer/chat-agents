@@ -10,6 +10,8 @@ class Settings:
     EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "64"))
     EMBEDDING_TARGET_DIM = int(os.getenv("EMBEDDING_TARGET_DIM", "3072"))
     HTTP_TIMEOUT_SECONDS = float(os.getenv("HTTP_TIMEOUT_SECONDS", "60"))
+    # Vertex may require longer per-request timeout than general HTTP
+    VERTEX_HTTP_TIMEOUT_SECONDS = float(os.getenv("VERTEX_HTTP_TIMEOUT_SECONDS", os.getenv("HTTP_TIMEOUT_SECONDS", "120")))
 
     CHAT_PROVIDER_BASE_URL = os.getenv("CHAT_PROVIDER_BASE_URL", os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"))
     CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1")
@@ -67,6 +69,8 @@ class Settings:
     GROK_ENABLE_CONTEXT_CACHE = os.getenv("GROK_ENABLE_CONTEXT_CACHE", "false").lower() in {"1", "true", "yes"}
     GROK_CACHE_TTL_SECONDS = int(os.getenv("GROK_CACHE_TTL_SECONDS", "1800"))
     GROK_CACHE_MIN_CHARS = int(os.getenv("GROK_CACHE_MIN_CHARS", "4000"))
+    # Vertex-specific chat cap (preferred over global chat cap)
+    VERTEX_CHAT_MAX_TOKENS = int(os.getenv("VERTEX_CHAT_MAX_TOKENS", os.getenv("VERTEX_MAX_TOKENS", "8192")))
 
     MAX_CHUNK_CHARS = int(os.getenv("MAX_CHUNK_CHARS", os.getenv("MAX_CHUNK_TOKENS", "1100")))
     CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "240"))
@@ -102,12 +106,14 @@ settings.CHUNK_OVERLAP = max(0, settings.CHUNK_OVERLAP)
 settings.TOP_K = _as_positive_int("TOP_K", settings.TOP_K)
 settings.MAX_CANDIDATE_CHUNKS = _as_positive_int("MAX_CANDIDATE_CHUNKS", settings.MAX_CANDIDATE_CHUNKS)
 settings.HTTP_TIMEOUT_SECONDS = max(1.0, settings.HTTP_TIMEOUT_SECONDS)
+settings.VERTEX_HTTP_TIMEOUT_SECONDS = max(1.0, settings.VERTEX_HTTP_TIMEOUT_SECONDS)
 settings.AUTH_TOKEN_TTL_SECONDS = _as_positive_int("AUTH_TOKEN_TTL_SECONDS", settings.AUTH_TOKEN_TTL_SECONDS)
 settings.AUTH_HASH_ITERATIONS = _as_positive_int("AUTH_HASH_ITERATIONS", settings.AUTH_HASH_ITERATIONS)
 settings.GROK_MAX_TOKENS = _as_positive_int("GROK_MAX_TOKENS", settings.GROK_MAX_TOKENS)
 settings.GROK_CONTEXT_WINDOW = _as_positive_int("GROK_CONTEXT_WINDOW", settings.GROK_CONTEXT_WINDOW)
 settings.GROK_CACHE_TTL_SECONDS = _as_positive_int("GROK_CACHE_TTL_SECONDS", settings.GROK_CACHE_TTL_SECONDS)
 settings.GROK_CACHE_MIN_CHARS = _as_positive_int("GROK_CACHE_MIN_CHARS", settings.GROK_CACHE_MIN_CHARS)
+settings.VERTEX_CHAT_MAX_TOKENS = _as_positive_int("VERTEX_CHAT_MAX_TOKENS", settings.VERTEX_CHAT_MAX_TOKENS)
 
 if settings.CHUNK_OVERLAP >= settings.MAX_CHUNK_CHARS:
     settings.CHUNK_OVERLAP = max(0, settings.MAX_CHUNK_CHARS // 4)
@@ -169,4 +175,5 @@ settings.VERTEX_CACHE_MIN_CHARS = int(os.getenv("VERTEX_CACHE_MIN_CHARS", "4000"
 settings.VERTEX_MAX_TOKENS = int(os.getenv("VERTEX_MAX_TOKENS", "8192"))
 settings.VERTEX_TRUNCATE_SYSTEM_CHARS = int(os.getenv("VERTEX_TRUNCATE_SYSTEM_CHARS", "60000"))
 settings.VERTEX_USE_OAUTH = os.getenv("VERTEX_USE_OAUTH", "true").lower() in {"1", "true", "yes"}
+settings.VERTEX_ENABLE_COUNT_TOKENS = os.getenv("VERTEX_ENABLE_COUNT_TOKENS", "false").lower() in {"1", "true", "yes"}
 GEMINI_TRUNCATE_SYSTEM_CHARS = settings.GEMINI_TRUNCATE_SYSTEM_CHARS
